@@ -135,6 +135,8 @@ Type `/` in Normal mode, then enter a pattern and press `Enter`. The cursor jump
 
 Quick Ed highlights keywords, types, strings, numbers, and comments. Language definitions are configured in Lua (see below). Supported out of the box (via `~/.config/qe/init.lua`): **C/C++**, **Lua**.
 
+When the cursor is on a bracket (`(`, `)`, `[`, `]`, `{`, `}`), the matching counterpart is highlighted in bold reverse video. The match search crosses line boundaries.
+
 ---
 
 ## Lua Configuration

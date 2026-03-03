@@ -49,6 +49,11 @@ typedef struct {
 
     /* Syntax highlighting */
     const SyntaxDef *syntax;           /* NULL = no highlighting */
+
+    /* Bracket match (recomputed each frame) */
+    int match_bracket_valid;
+    int match_bracket_row;
+    int match_bracket_col;
 } EditorConfig;
 
 extern EditorConfig E;

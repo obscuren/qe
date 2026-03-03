@@ -98,25 +98,35 @@ static const char *hl_to_escape(unsigned char hl) {
         case HL_TYPE:    return "\x1b[36m";    /* cyan        */
         case HL_STRING:  return "\x1b[32m";    /* green       */
         case HL_NUMBER:  return "\x1b[35m";    /* magenta     */
-        case HL_SEARCH:  return "\x1b[7m";     /* reverse     */
-        default:         return NULL;
+        case HL_SEARCH:        return "\x1b[7m";    /* reverse      */
+        case HL_BRACKET_MATCH: return "\x1b[1;7m"; /* bold+reverse */
+        default:               return NULL;
     }
 }
 
+/* bm0, bm1: file-column positions of bracket match chars on this row (-1 = none). */
 static void render_row_content(AppendBuf *ab, const Row *row,
                                int coloff, int visible_len,
-                               const SearchQuery *q) {
+                               const SearchQuery *q, int bm0, int bm1) {
     if (visible_len <= 0) return;
 
     /* Build a per-character final highlight array for the visible slice.
-       HL_NORMAL (0) is the default — search matches override syntax. */
+       HL_NORMAL (0) is the default. Priority: search > bracket > syntax. */
     unsigned char final_hl[visible_len];
     if (row->hl)
         memcpy(final_hl, &row->hl[coloff], visible_len);
     else
         memset(final_hl, HL_NORMAL, visible_len);
 
-    /* Overlay search matches (HL_SEARCH overrides syntax). */
+    /* Overlay bracket match positions (overrides syntax). */
+    int bm[2] = {bm0, bm1};
+    for (int i = 0; i < 2; i++) {
+        int col = bm[i] - coloff;
+        if (col >= 0 && col < visible_len)
+            final_hl[col] = HL_BRACKET_MATCH;
+    }
+
+    /* Overlay search matches (HL_SEARCH overrides bracket+syntax). */
     if (q) {
         int col_end = coloff + visible_len;
         int pos     = coloff;
@@ -163,9 +173,71 @@ static void render_row_content(AppendBuf *ab, const Row *row,
     if (any) ab_append(ab, "\x1b[m", 3);  /* final reset */
 }
 
+/* Find the bracket that matches the one under the cursor (if any).
+   Result is stored in E.match_bracket_{valid,row,col}.
+   Only active in Normal mode; no syntax awareness (string/comment skipping). */
+static void editor_find_bracket_match(void) {
+    E.match_bracket_valid = 0;
+    if (E.mode != MODE_NORMAL || E.buf.numrows == 0 || E.cy >= E.buf.numrows)
+        return;
+
+    const Row *cur = &E.buf.rows[E.cy];
+    if (E.cx >= cur->len) return;
+
+    char ch = cur->chars[E.cx];
+    char open_ch, close_ch;
+    int  forward;
+
+    switch (ch) {
+        case '(': open_ch = '('; close_ch = ')'; forward = 1; break;
+        case '[': open_ch = '['; close_ch = ']'; forward = 1; break;
+        case '{': open_ch = '{'; close_ch = '}'; forward = 1; break;
+        case ')': open_ch = '('; close_ch = ')'; forward = 0; break;
+        case ']': open_ch = '['; close_ch = ']'; forward = 0; break;
+        case '}': open_ch = '{'; close_ch = '}'; forward = 0; break;
+        default:  return;
+    }
+
+    int depth = 1;
+    int r = E.cy;
+    int c = E.cx;
+
+    if (forward) {
+        c++;
+        while (r < E.buf.numrows) {
+            const char *line = E.buf.rows[r].chars;
+            int          len  = E.buf.rows[r].len;
+            while (c < len) {
+                if      (line[c] == open_ch)  depth++;
+                else if (line[c] == close_ch) { if (--depth == 0) goto found; }
+                c++;
+            }
+            r++; c = 0;
+        }
+    } else {
+        c--;
+        while (r >= 0) {
+            const char *line = E.buf.rows[r].chars;
+            while (c >= 0) {
+                if      (line[c] == close_ch) depth++;
+                else if (line[c] == open_ch)  { if (--depth == 0) goto found; }
+                c--;
+            }
+            r--; if (r >= 0) c = E.buf.rows[r].len - 1;
+        }
+    }
+    return;
+found:
+    E.match_bracket_valid = 1;
+    E.match_bracket_row   = r;
+    E.match_bracket_col   = c;
+}
+
 static void editor_draw_rows(AppendBuf *ab) {
     int gw           = gutter_width();
     int content_cols = E.screencols - gw;
+
+    editor_find_bracket_match();
 
     /* Cascade hl_open_comment for any rows dirtied since last draw. */
     if (E.syntax && E.buf.hl_dirty_from < E.buf.numrows) {
@@ -216,9 +288,18 @@ static void editor_draw_rows(AppendBuf *ab) {
             if (E.syntax)
                 syntax_highlight_row(E.syntax, row, row->hl_open_comment);
 
+            /* Bracket match columns for this row (-1 = not on this row). */
+            int bm0 = -1, bm1 = -1;
+            if (E.match_bracket_valid) {
+                if (filerow == E.cy)
+                    bm0 = E.cx;
+                if (filerow == E.match_bracket_row)
+                    bm1 = E.match_bracket_col;
+            }
+
             if (len > 0) {
-                if (hl_query || row->hl)
-                    render_row_content(ab, row, E.coloff, len, hl_query);
+                if (hl_query || row->hl || bm0 != -1 || bm1 != -1)
+                    render_row_content(ab, row, E.coloff, len, hl_query, bm0, bm1);
                 else
                     ab_append(ab, &row->chars[E.coloff], len);
             }

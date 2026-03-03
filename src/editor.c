@@ -38,6 +38,7 @@ void editor_init(void) {
     E.last_search_valid = 0;
 
     E.syntax = NULL;
+    E.match_bracket_valid = 0;
 }
 
 void editor_detect_syntax(void) {
