@@ -58,6 +58,8 @@ Quick Ed is modal, like Vim. The current mode is shown in the command bar at the
 | `j` / `↓`        | Move down                       |
 | `e`              | Move to end of next word        |
 | `E`              | Move to end of line             |
+| `b`              | Move to start of previous word  |
+| `B`              | Move to start of line           |
 | `0`              | Move to start of line           |
 | `$`              | Move to end of line             |
 | `G`              | Jump to last line               |

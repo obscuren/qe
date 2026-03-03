@@ -224,6 +224,33 @@ static void editor_move_word_end(void) {
     }
 }
 
+/* 'b' — move to the start of the previous word (crosses lines). */
+static void editor_move_word_start(void) {
+    if (E.buf.numrows == 0) return;
+
+    int r = E.cy;
+    int c = E.cx - 1;   /* step back past current position */
+
+    for (;;) {
+        if (r < 0) return;
+
+        const char *line = E.buf.rows[r].chars;
+
+        /* Skip whitespace going left; retreat to previous row when needed. */
+        while (c >= 0 && char_class(line[c]) == 0) c--;
+
+        if (c < 0) { r--; if (r >= 0) c = E.buf.rows[r].len - 1; continue; }
+
+        /* Found the end of a token — retreat to its first character. */
+        int cls = char_class(line[c]);
+        while (c - 1 >= 0 && char_class(line[c - 1]) == cls) c--;
+
+        E.cy = r;
+        E.cx = c;
+        return;
+    }
+}
+
 /* ── Cursor movement ─────────────────────────────────────────────────── */
 
 static void editor_move_cursor(int key) {
@@ -499,6 +526,15 @@ static void editor_process_normal(int c) {
                 int len = E.buf.rows[E.cy].len;
                 E.cx = len > 0 ? len - 1 : 0;
             }
+            break;
+
+        case 'b':
+            editor_move_word_start();
+            break;
+
+        case 'B':
+            /* move to start of line (no mode change) */
+            E.cx = 0;
             break;
 
         case '0':
