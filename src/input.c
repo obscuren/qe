@@ -359,6 +359,13 @@ static void editor_process_normal(int c) {
             enter_insert_mode();
             break;
 
+        case 'A':
+            /* append at end of line */
+            if (E.cy < E.buf.numrows)
+                E.cx = E.buf.rows[E.cy].len;
+            enter_insert_mode();
+            break;
+
         case 'o': {
             /* open line below — snapshot covers the row insertion too */
             char ind[256]; int ind_len = 0, extra = 0;

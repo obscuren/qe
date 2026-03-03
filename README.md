@@ -87,6 +87,16 @@ Enter insert mode with `i` (before cursor), `a` (after cursor), `o` (new line be
 | `n`  | Repeat search forward           |
 | `N`  | Repeat search backward          |
 
+## Entering Insert mode (Normal mode)
+
+| Key  | Action                                        |
+|------|-----------------------------------------------|
+| `i`  | Insert before cursor                          |
+| `a`  | Append after cursor                           |
+| `A`  | Append at end of line                         |
+| `o`  | Open new line below and enter Insert mode     |
+| `O`  | Open new line above and enter Insert mode     |
+
 ---
 
 ## Command mode (`:`)
