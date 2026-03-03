@@ -99,7 +99,7 @@ static const char *hl_to_escape(unsigned char hl) {
         case HL_STRING:  return "\x1b[32m";    /* green       */
         case HL_NUMBER:  return "\x1b[35m";    /* magenta     */
         case HL_SEARCH:        return "\x1b[7m";    /* reverse      */
-        case HL_BRACKET_MATCH: return "\x1b[1;7m"; /* bold+reverse */
+        case HL_BRACKET_MATCH: return "\x1b[104;97m"; /* bright blue bg + white fg */
         default:               return NULL;
     }
 }
@@ -384,7 +384,7 @@ void editor_refresh_screen(void) {
 
     /* Set cursor shape: block in normal, bar in insert/command/search. */
     if (E.mode == MODE_NORMAL)
-        ab_append(&ab, "\x1b[2 q", 5);  /* steady block */
+        ab_append(&ab, "\x1b[1 q", 5);  /* blinking block */
     else
         ab_append(&ab, "\x1b[6 q", 5);  /* steady bar */
 
