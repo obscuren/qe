@@ -5,6 +5,7 @@
 #include "search.h"
 #include "utils.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -180,6 +181,46 @@ static void editor_delete_char(void) {
         buf_delete_row(&E.buf, E.cy);
         E.cy--;
         buf_mark_hl_dirty(&E.buf, E.cy);
+    }
+}
+
+/* ── Word motion ─────────────────────────────────────────────────────── */
+
+/* Character class for word-motion purposes:
+     0 = whitespace
+     1 = alphanumeric / underscore  (word)
+     2 = other printable            (punctuation run) */
+static int char_class(char c) {
+    if (c == ' ' || c == '\t') return 0;
+    if (isalnum((unsigned char)c) || c == '_') return 1;
+    return 2;
+}
+
+/* 'e' — move to the end of the next word (crosses lines). */
+static void editor_move_word_end(void) {
+    if (E.buf.numrows == 0) return;
+
+    int r = E.cy;
+    int c = E.cx + 1;   /* advance past current position */
+
+    for (;;) {
+        if (r >= E.buf.numrows) return;
+
+        const char *line = E.buf.rows[r].chars;
+        int         len  = E.buf.rows[r].len;
+
+        /* Skip whitespace, advancing to next row when needed. */
+        while (c < len && char_class(line[c]) == 0) c++;
+
+        if (c >= len) { r++; c = 0; continue; }
+
+        /* Found the start of a word — advance to its last character. */
+        int cls = char_class(line[c]);
+        while (c + 1 < len && char_class(line[c + 1]) == cls) c++;
+
+        E.cy = r;
+        E.cx = c;
+        return;
     }
 }
 
@@ -448,6 +489,18 @@ static void editor_process_normal(int c) {
         }
 
         /* --- motion --- */
+        case 'e':
+            editor_move_word_end();
+            break;
+
+        case 'E':
+            /* move to end of line (no mode change) */
+            if (E.cy < E.buf.numrows) {
+                int len = E.buf.rows[E.cy].len;
+                E.cx = len > 0 ? len - 1 : 0;
+            }
+            break;
+
         case '0':
             E.cx = 0;
             break;
