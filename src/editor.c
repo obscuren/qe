@@ -64,6 +64,10 @@ void editor_init(void) {
     E.yank_rows     = NULL;
     E.yank_numrows  = 0;
     E.yank_linewise = 0;
+
+    E.completion_matches = NULL;
+    E.completion_count   = 0;
+    E.completion_idx     = -1;
 }
 
 void editor_detect_syntax(void) {

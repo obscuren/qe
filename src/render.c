@@ -368,6 +368,27 @@ static void editor_draw_rows(AppendBuf *ab) {
 }
 
 static void editor_draw_status_bar(AppendBuf *ab) {
+    /* Show tab-completion list instead of normal status bar when active */
+    if (E.completion_idx >= 0 && E.mode == MODE_COMMAND) {
+        ab_append(ab, "\x1b[107;30m", 9);  /* bright white bg, black text */
+        ab_append(ab, "\x1b[K", 3);        /* erase rest of line with that bg */
+        int col = 0;
+        for (int i = 0; i < E.completion_count; i++) {
+            int len = (int)strlen(E.completion_matches[i]);
+            if (col + len + 1 > E.screencols) break;
+            if (i == E.completion_idx)
+                ab_append(ab, "\x1b[40;97m", 8);   /* black bg, bright white text */
+            ab_append(ab, E.completion_matches[i], len);
+            if (i == E.completion_idx)
+                ab_append(ab, "\x1b[107;30m", 9);  /* back to bright white bg, black text */
+            ab_append(ab, " ", 1);
+            col += len + 1;
+        }
+        ab_append(ab, "\x1b[m", 3);
+        ab_append(ab, "\r\n", 2);
+        return;
+    }
+
     ab_append(ab, "\x1b[7m", 4);  /* reverse video on */
 
     char left[128], right[32];

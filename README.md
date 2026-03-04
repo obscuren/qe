@@ -209,6 +209,17 @@ All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) 
 
 Unsaved changes are indicated by `[+]` in the status bar. Commands that would discard them require `!` to confirm.
 
+### Tab completion for `:e`
+
+Press `Tab` after `:e` (or `:e <prefix>`) to complete filenames from the current working directory. Matching files are shown in the status bar; the currently selected entry is highlighted. Press `Tab` again to cycle to the next match. Any other key dismisses the list.
+
+```
+:e <Tab>          list all files; complete to first match
+:e src/<Tab>      list only files starting with "src/"
+<Tab>             cycle to next match
+<any other key>   dismiss list, continue editing
+```
+
 ---
 
 ## Search (`/`)

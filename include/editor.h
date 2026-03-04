@@ -98,6 +98,11 @@ typedef struct {
     char **yank_rows;
     int    yank_numrows;
     int    yank_linewise;  /* 1 = line-oriented (dd/yy), 0 = char-oriented */
+
+    /* Tab completion (command mode :e) */
+    char **completion_matches;
+    int    completion_count;
+    int    completion_idx;   /* -1 = inactive, >= 0 = index of selected match */
 } EditorConfig;
 
 extern EditorConfig E;

@@ -6,6 +6,7 @@
 #include "utils.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -1407,22 +1408,110 @@ static void editor_process_insert(int c) {
     }
 }
 
+/* ── Tab completion ──────────────────────────────────────────────────── */
+
+static int cmp_str(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+static void completion_free(void) {
+    for (int i = 0; i < E.completion_count; i++)
+        free(E.completion_matches[i]);
+    free(E.completion_matches);
+    E.completion_matches = NULL;
+    E.completion_count   = 0;
+    E.completion_idx     = -1;
+}
+
+static void completion_build(const char *prefix) {
+    completion_free();
+
+    /* Split prefix at last '/' so we can open the right directory.
+       e.g. "src/inp" → open "src", match names starting with "inp",
+            "src/"    → open "src", match all names,
+            "my_f"    → open ".",   match names starting with "my_f" */
+    const char *last_slash = strrchr(prefix, '/');
+    int dir_len = last_slash ? (int)(last_slash - prefix + 1) : 0; /* incl. '/' */
+    const char *name_part = prefix + dir_len;
+    int namelen = (int)strlen(name_part);
+
+    char dir_open[512];
+    if (dir_len > 0)
+        snprintf(dir_open, sizeof(dir_open), "%.*s", dir_len - 1, prefix);
+    else
+        strcpy(dir_open, ".");
+
+    DIR *d = opendir(dir_open);
+    if (!d) return;
+
+    int cap = 16;
+    E.completion_matches = malloc(sizeof(char *) * cap);
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        /* skip hidden files unless name_part itself starts with '.' */
+        if (de->d_name[0] == '.' && (namelen == 0 || name_part[0] != '.'))
+            continue;
+        if (namelen && strncmp(de->d_name, name_part, namelen) != 0)
+            continue;
+        if (E.completion_count == cap) {
+            cap *= 2;
+            E.completion_matches = realloc(E.completion_matches,
+                                           sizeof(char *) * cap);
+        }
+        /* Store full path: dir prefix + matched name */
+        char full[768];
+        if (dir_len > 0)
+            snprintf(full, sizeof(full), "%.*s%s", dir_len, prefix, de->d_name);
+        else
+            snprintf(full, sizeof(full), "%s", de->d_name);
+        E.completion_matches[E.completion_count++] = strdup(full);
+    }
+    closedir(d);
+    if (E.completion_count == 0) {
+        free(E.completion_matches);
+        E.completion_matches = NULL;
+        return;
+    }
+    qsort(E.completion_matches, E.completion_count, sizeof(char *), cmp_str);
+    E.completion_idx = 0;
+}
+
 /* ── Command mode ────────────────────────────────────────────────────── */
 
 static void editor_process_command(int c) {
     if (lua_bridge_call_key(MODE_COMMAND, c)) return;
     switch (c) {
+        case '\t': {  /* Tab — file completion for :e */
+            const char *cmd = E.cmdbuf;
+            if (cmd[0] != 'e' || (cmd[1] != '\0' && cmd[1] != ' ')) break;
+            const char *prefix = (cmd[1] == ' ') ? cmd + 2 : "";
+            if (E.completion_idx == -1) {
+                completion_build(prefix);
+            } else {
+                E.completion_idx = (E.completion_idx + 1) % E.completion_count;
+            }
+            if (E.completion_idx >= 0) {
+                int len = snprintf(E.cmdbuf, sizeof(E.cmdbuf), "e %s",
+                                   E.completion_matches[E.completion_idx]);
+                E.cmdlen = len;
+            }
+            break;
+        }
+
         case '\x1b':
+            completion_free();
             E.mode = MODE_NORMAL;
             E.cmdbuf[0] = '\0';
             E.cmdlen    = 0;
             break;
 
         case '\r':
+            completion_free();
             editor_execute_command();
             break;
 
         case 127:  /* Backspace */
+            completion_free();
             if (E.cmdlen > 0) {
                 E.cmdbuf[--E.cmdlen] = '\0';
                 if (E.cmdlen == 0)
@@ -1431,6 +1520,7 @@ static void editor_process_command(int c) {
             break;
 
         default:
+            completion_free();
             if (c >= 32 && c < 127 &&
                 E.cmdlen < (int)sizeof(E.cmdbuf) - 1) {
                 E.cmdbuf[E.cmdlen++] = (char)c;
