@@ -4,6 +4,7 @@
 #include "search.h"
 #include "syntax.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,25 +101,60 @@ static const char *hl_to_escape(unsigned char hl) {
         case HL_NUMBER:  return "\x1b[35m";    /* magenta     */
         case HL_SEARCH:        return "\x1b[7m";    /* reverse      */
         case HL_BRACKET_MATCH: return "\x1b[104;97m"; /* bright blue bg + white fg */
+        case HL_VISUAL:        return "\x1b[44m";     /* blue background           */
         default:               return NULL;
     }
 }
 
-/* bm0, bm1: file-column positions of bracket match chars on this row (-1 = none). */
+/* For a given file row, compute the visual-selection column range [*c0, *c1).
+   Returns 1 if the row is (at least partially) selected, 0 otherwise.
+   *c1 == INT_MAX means "to end of row" and must be resolved by the caller. */
+static int visual_col_range(int filerow, int *c0, int *c1) {
+    if (E.mode != MODE_VISUAL && E.mode != MODE_VISUAL_LINE) return 0;
+
+    int ar = E.visual_anchor_row, ac = E.visual_anchor_col;
+    int cr = E.cy,               cc = E.cx;
+    int r0 = ar < cr ? ar : cr;
+    int r1 = ar > cr ? ar : cr;
+    if (filerow < r0 || filerow > r1) return 0;
+
+    if (E.mode == MODE_VISUAL_LINE) {
+        *c0 = 0; *c1 = INT_MAX;
+        return 1;
+    }
+
+    /* Charwise: determine the ordered start/end positions. */
+    int sr, sc, er, ec;
+    if (ar < cr || (ar == cr && ac <= cc)) {
+        sr = ar; sc = ac; er = cr; ec = cc;
+    } else {
+        sr = cr; sc = cc; er = ar; ec = ac;
+    }
+
+    if      (filerow == sr && filerow == er) { *c0 = sc;  *c1 = ec + 1;   }
+    else if (filerow == sr)                  { *c0 = sc;  *c1 = INT_MAX;  }
+    else if (filerow == er)                  { *c0 = 0;   *c1 = ec + 1;   }
+    else                                     { *c0 = 0;   *c1 = INT_MAX;  }
+    return 1;
+}
+
+/* Priority (lowest → highest): syntax, bracket match, visual, search.
+   bm0/bm1: bracket-match file-column positions on this row (-1 = none).
+   vis_c0/vis_c1: visual selection file-column range (-1 = none on this row). */
 static void render_row_content(AppendBuf *ab, const Row *row,
                                int coloff, int visible_len,
-                               const SearchQuery *q, int bm0, int bm1) {
+                               const SearchQuery *q, int bm0, int bm1,
+                               int vis_c0, int vis_c1) {
     if (visible_len <= 0) return;
 
-    /* Build a per-character final highlight array for the visible slice.
-       HL_NORMAL (0) is the default. Priority: search > bracket > syntax. */
+    /* Build a per-character final highlight array for the visible slice. */
     unsigned char final_hl[visible_len];
     if (row->hl)
         memcpy(final_hl, &row->hl[coloff], visible_len);
     else
         memset(final_hl, HL_NORMAL, visible_len);
 
-    /* Overlay bracket match positions (overrides syntax). */
+    /* Overlay bracket match positions. */
     int bm[2] = {bm0, bm1};
     for (int i = 0; i < 2; i++) {
         int col = bm[i] - coloff;
@@ -126,7 +162,17 @@ static void render_row_content(AppendBuf *ab, const Row *row,
             final_hl[col] = HL_BRACKET_MATCH;
     }
 
-    /* Overlay search matches (HL_SEARCH overrides bracket+syntax). */
+    /* Overlay visual selection (overrides bracket match). */
+    if (vis_c0 >= 0) {
+        int vc0 = vis_c0 - coloff;
+        int vc1 = (vis_c1 == INT_MAX) ? visible_len : vis_c1 - coloff;
+        if (vc0 < 0)            vc0 = 0;
+        if (vc1 > visible_len)  vc1 = visible_len;
+        for (int i = vc0; i < vc1; i++)
+            final_hl[i] = HL_VISUAL;
+    }
+
+    /* Overlay search matches (highest priority). */
     if (q) {
         int col_end = coloff + visible_len;
         int pos     = coloff;
@@ -297,9 +343,20 @@ static void editor_draw_rows(AppendBuf *ab) {
                     bm1 = E.match_bracket_col;
             }
 
+            /* Visual selection range for this row (-1 = not selected). */
+            int vis_c0 = -1, vis_c1 = -1;
+            {
+                int vc0, vc1;
+                if (visual_col_range(filerow, &vc0, &vc1)) {
+                    vis_c0 = vc0;
+                    vis_c1 = (vc1 == INT_MAX) ? row->len : vc1;
+                }
+            }
+
             if (len > 0) {
-                if (hl_query || row->hl || bm0 != -1 || bm1 != -1)
-                    render_row_content(ab, row, E.coloff, len, hl_query, bm0, bm1);
+                if (hl_query || row->hl || bm0 != -1 || bm1 != -1 || vis_c0 != -1)
+                    render_row_content(ab, row, E.coloff, len, hl_query,
+                                       bm0, bm1, vis_c0, vis_c1);
                 else
                     ab_append(ab, &row->chars[E.coloff], len);
             }
@@ -343,6 +400,14 @@ static void editor_draw_command_bar(AppendBuf *ab) {
     switch (E.mode) {
         case MODE_INSERT:
             ab_append(ab, "-- INSERT --", 12);
+            break;
+
+        case MODE_VISUAL:
+            ab_append(ab, "-- VISUAL --", 12);
+            break;
+
+        case MODE_VISUAL_LINE:
+            ab_append(ab, "-- VISUAL LINE --", 17);
             break;
 
         case MODE_COMMAND: {

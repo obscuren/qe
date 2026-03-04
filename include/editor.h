@@ -12,6 +12,8 @@ typedef enum {
     MODE_INSERT,
     MODE_COMMAND,
     MODE_SEARCH,
+    MODE_VISUAL,       /* characterwise visual selection */
+    MODE_VISUAL_LINE,  /* linewise visual selection      */
 } EditorMode;
 
 /* All user-configurable settings live here so they can later be
@@ -54,6 +56,10 @@ typedef struct {
     int match_bracket_valid;
     int match_bracket_row;
     int match_bracket_col;
+
+    /* Visual mode anchor */
+    int visual_anchor_row;
+    int visual_anchor_col;
 
     /* Operator-pending state (normal mode) */
     char  pending_op;      /* 'd' or 'y' when waiting for motion; '\0' = none */

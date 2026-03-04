@@ -39,12 +39,14 @@ qe file.c           # open a file
 
 Quick Ed is modal, like Vim. The current mode is shown in the command bar at the bottom.
 
-| Mode    | How to enter              | What it does                        |
-|---------|---------------------------|-------------------------------------|
-| Normal  | `Esc` from any mode       | Navigate and issue commands         |
-| Insert  | `i`, `a`, `o`, `O`        | Type and edit text                  |
-| Command | `:`                       | Run editor commands                 |
-| Search  | `/`                       | Search through the buffer           |
+| Mode         | How to enter              | What it does                        |
+|--------------|---------------------------|-------------------------------------|
+| Normal       | `Esc` from any mode       | Navigate and issue commands         |
+| Insert       | `i`, `a`, `o`, `O`        | Type and edit text                  |
+| Command      | `:`                       | Run editor commands                 |
+| Search       | `/`                       | Search through the buffer           |
+| Visual       | `v`                       | Characterwise selection             |
+| Visual Line  | `V`                       | Linewise selection                  |
 
 ---
 
@@ -121,6 +123,21 @@ Operators combine with a motion to act on a range of text. Type the operator key
 
 Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
 `c` operations are a single undo step — pressing `u` restores the text before the change.
+
+## Visual mode (`v` / `V`)
+
+Press `v` for characterwise selection or `V` for linewise selection. The selection extends as you move the cursor using any normal-mode motion key. Press the same key again or `Esc` to cancel.
+
+| Key      | Action                                      |
+|----------|---------------------------------------------|
+| `d` / `x`| Delete selection (goes into register)       |
+| `y`      | Yank (copy) selection into register         |
+| `c`      | Delete selection and enter Insert mode      |
+| `v`      | Toggle characterwise / cancel               |
+| `V`      | Toggle linewise / cancel                    |
+| `Esc`    | Cancel selection, return to Normal          |
+
+All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) extend the selection.
 
 ## Entering Insert mode (Normal mode)
 

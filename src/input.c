@@ -397,6 +397,156 @@ static void editor_paste(int before) {
     }
 }
 
+/* ── Visual mode ─────────────────────────────────────────────────────── */
+
+static void editor_move_cursor(int key);  /* forward declaration */
+
+/* Return ordered selection bounds: [r0,c0] start, [r1,c1] end (inclusive). */
+static void visual_get_bounds(int *r0, int *c0, int *r1, int *c1) {
+    int ar = E.visual_anchor_row, ac = E.visual_anchor_col;
+    int cr = E.cy,               cc = E.cx;
+    if (ar < cr || (ar == cr && ac <= cc)) {
+        *r0 = ar; *c0 = ac; *r1 = cr; *c1 = cc;
+    } else {
+        *r0 = cr; *c0 = cc; *r1 = ar; *c1 = ac;
+    }
+}
+
+static void visual_op_yank(void) {
+    int r0, c0, r1, c1;
+    visual_get_bounds(&r0, &c0, &r1, &c1);
+    int linewise = (E.mode == MODE_VISUAL_LINE) || (r0 != r1);
+    E.mode = MODE_NORMAL;
+    E.cy = r0; E.cx = c0;
+    if (linewise) {
+        yank_set_lines(r0, r1);
+        snprintf(E.statusmsg, sizeof(E.statusmsg),
+                 "%d line%s yanked", r1 - r0 + 1, r1 - r0 ? "s" : "");
+    } else {
+        int end = c1 + 1;
+        if (end > E.buf.rows[r0].len) end = E.buf.rows[r0].len;
+        yank_set_chars(r0, c0, end);
+    }
+}
+
+static void visual_op_delete(void) {
+    int r0, c0, r1, c1;
+    visual_get_bounds(&r0, &c0, &r1, &c1);
+    int linewise = (E.mode == MODE_VISUAL_LINE) || (r0 != r1);
+    E.mode = MODE_NORMAL;
+    if (linewise) {
+        yank_set_lines(r0, r1);
+        push_undo();
+        for (int i = r1; i >= r0; i--)
+            buf_delete_row(&E.buf, i);
+        E.cy = r0;
+        if (E.cy >= E.buf.numrows && E.cy > 0) E.cy--;
+        E.cx = 0;
+    } else {
+        int end = c1 + 1;
+        if (end > E.buf.rows[r0].len) end = E.buf.rows[r0].len;
+        yank_set_chars(r0, c0, end);
+        push_undo();
+        Row *row = &E.buf.rows[r0];
+        for (int i = end - 1; i >= c0; i--)
+            buf_row_delete_char(row, i);
+        E.buf.dirty++;
+        buf_mark_hl_dirty(&E.buf, r0);
+        E.cy = r0;
+        E.cx = c0;
+        if (E.cx > row->len) E.cx = row->len;
+    }
+}
+
+static void visual_op_change(void) {
+    int r0, c0, r1, c1;
+    visual_get_bounds(&r0, &c0, &r1, &c1);
+    int linewise = (E.mode == MODE_VISUAL_LINE) || (r0 != r1);
+    /* Snapshot before modification so one 'u' restores pre-change state. */
+    E.pre_insert_snapshot = editor_capture_state();
+    E.pre_insert_dirty    = E.buf.dirty;
+    E.has_pre_insert      = 1;
+    E.mode = MODE_INSERT;
+    if (linewise) {
+        yank_set_lines(r0, r1);
+        for (int i = r1; i >= r0; i--)
+            buf_delete_row(&E.buf, i);
+        buf_insert_row(&E.buf, r0, "", 0);
+        E.cy = r0;
+        E.cx = 0;
+    } else {
+        int end = c1 + 1;
+        if (end > E.buf.rows[r0].len) end = E.buf.rows[r0].len;
+        yank_set_chars(r0, c0, end);
+        Row *row = &E.buf.rows[r0];
+        for (int i = end - 1; i >= c0; i--)
+            buf_row_delete_char(row, i);
+        E.buf.dirty++;
+        buf_mark_hl_dirty(&E.buf, r0);
+        E.cy = r0;
+        E.cx = c0;
+        if (E.cx > row->len) E.cx = row->len;
+    }
+}
+
+static void editor_process_visual(int c) {
+    if (lua_bridge_call_key(E.mode, c)) return;
+
+    switch (c) {
+        case '\x1b':
+            E.mode = MODE_NORMAL;
+            break;
+
+        case 'v':
+            /* Toggle charwise; if already charwise, cancel. */
+            E.mode = (E.mode == MODE_VISUAL) ? MODE_NORMAL : MODE_VISUAL;
+            break;
+
+        case 'V':
+            /* Toggle linewise; if already linewise, cancel. */
+            E.mode = (E.mode == MODE_VISUAL_LINE) ? MODE_NORMAL : MODE_VISUAL_LINE;
+            break;
+
+        case 'd':
+        case 'x':
+            visual_op_delete();
+            break;
+
+        case 'y':
+            visual_op_yank();
+            break;
+
+        case 'c':
+            visual_op_change();
+            break;
+
+        /* Cursor movement — same keys as normal mode. */
+        case 'w': editor_move_word_next(); break;
+        case 'e': editor_move_word_end();  break;
+        case 'b': editor_move_word_start(); break;
+        case '0': E.cx = 0; break;
+        case '$':
+            if (E.cy < E.buf.numrows) {
+                int len = E.buf.rows[E.cy].len;
+                E.cx = len > 0 ? len - 1 : 0;
+            }
+            break;
+        case 'G':
+            if (E.buf.numrows > 0) E.cy = E.buf.numrows - 1;
+            break;
+        case ARROW_UP:    case 'k':
+        case ARROW_DOWN:  case 'j':
+        case ARROW_LEFT:  case 'h':
+        case ARROW_RIGHT: case 'l':
+        case HOME_KEY:
+        case END_KEY:
+        case PAGE_UP:
+        case PAGE_DOWN:
+            editor_move_cursor(c);
+            break;
+    }
+}
+
 /* ── Cursor movement ─────────────────────────────────────────────────── */
 
 static void editor_move_cursor(int key) {
@@ -674,6 +824,19 @@ static void editor_process_normal(int c) {
             break;
         }
 
+        /* --- visual mode --- */
+        case 'v':
+            E.visual_anchor_row = E.cy;
+            E.visual_anchor_col = E.cx;
+            E.mode = MODE_VISUAL;
+            break;
+
+        case 'V':
+            E.visual_anchor_row = E.cy;
+            E.visual_anchor_col = 0;
+            E.mode = MODE_VISUAL_LINE;
+            break;
+
         /* --- operators --- */
         case 'd':
         case 'y':
@@ -903,9 +1066,11 @@ void editor_process_keypress(void) {
     int c = editor_read_key();
 
     switch (E.mode) {
-        case MODE_NORMAL:  editor_process_normal(c);  break;
-        case MODE_INSERT:  editor_process_insert(c);  break;
-        case MODE_COMMAND: editor_process_command(c); break;
-        case MODE_SEARCH:  editor_process_search(c);  break;
+        case MODE_NORMAL:      editor_process_normal(c);  break;
+        case MODE_INSERT:      editor_process_insert(c);  break;
+        case MODE_COMMAND:     editor_process_command(c); break;
+        case MODE_SEARCH:      editor_process_search(c);  break;
+        case MODE_VISUAL:
+        case MODE_VISUAL_LINE: editor_process_visual(c);  break;
     }
 }

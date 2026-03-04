@@ -13,6 +13,7 @@ typedef enum {
     HL_NUMBER,
     HL_SEARCH,         /* render-only: search match overrides syntax        */
     HL_BRACKET_MATCH,  /* render-only: matching bracket pair                */
+    HL_VISUAL,         /* render-only: visual selection                     */
 } HlType;
 
 typedef struct {

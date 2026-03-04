@@ -40,6 +40,9 @@ void editor_init(void) {
     E.syntax = NULL;
     E.match_bracket_valid = 0;
 
+    E.visual_anchor_row = 0;
+    E.visual_anchor_col = 0;
+
     E.pending_op    = '\0';
     E.yank_rows     = NULL;
     E.yank_numrows  = 0;
