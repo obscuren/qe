@@ -200,8 +200,14 @@ All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) 
 | `:q`             | Quit (fails if unsaved changes)              |
 | `:q!`            | Quit without saving                          |
 | `:wq`            | Save and quit                                |
+| `:e filename`    | Open file (fails if unsaved changes)         |
+| `:e! filename`   | Open file, discarding unsaved changes        |
+| `:e`             | Reload current file from disk                |
+| `:e!`            | Reload current file, discarding changes      |
 | `:set nu`        | Show line numbers                            |
 | `:set nonu`      | Hide line numbers                            |
+
+Unsaved changes are indicated by `[+]` in the status bar. Commands that would discard them require `!` to confirm.
 
 ---
 

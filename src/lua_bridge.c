@@ -36,6 +36,7 @@ int lua_bridge_call_key(EditorMode mode, int key) {
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
                 snprintf(E.statusmsg, sizeof(E.statusmsg),
                          "lua: %s", lua_tostring(L, -1));
+                E.statusmsg_is_error = 1;
                 lua_pop(L, 1);
             }
             return 1;
@@ -64,6 +65,7 @@ static int l_set_option(lua_State *LS) {
 static int l_print(lua_State *LS) {
     const char *msg = luaL_checkstring(LS, 1);
     snprintf(E.statusmsg, sizeof(E.statusmsg), "%s", msg);
+    E.statusmsg_is_error = 0;
     return 0;
 }
 
@@ -189,22 +191,37 @@ static void try_load(const char *path) {
     if (luaL_dofile(L, path) == LUA_OK)
         return;
     const char *err = lua_tostring(L, -1);
-    if (err && strstr(err, "cannot open") == NULL)
+    if (err && strstr(err, "cannot open") == NULL) {
         snprintf(E.statusmsg, sizeof(E.statusmsg), "lua: %.110s", err);
+        E.statusmsg_is_error = 1;
+    }
     lua_pop(L, 1);
+}
+
+static void set_package_path(const char *config_dir) {
+    char code[640];
+    snprintf(code, sizeof(code),
+             "package.path = package.path .. \";%s/?.lua\"", config_dir);
+    luaL_dostring(L, code);
 }
 
 static void load_config(void) {
     const char *home = getenv("HOME");
     if (!home) return;
 
-    char path[512];
-    snprintf(path, sizeof(path), "%s/.config/qe/init.lua", home);
+    char config_dir[512];
+    snprintf(config_dir, sizeof(config_dir), "%s/.config/qe", home);
+    set_package_path(config_dir);
+
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/init.lua", config_dir);
     if (luaL_dofile(L, path) == LUA_OK) return;
     const char *err = lua_tostring(L, -1);
     int missing = err && strstr(err, "cannot open") != NULL;
-    if (!missing)
+    if (!missing) {
         snprintf(E.statusmsg, sizeof(E.statusmsg), "lua: %.110s", err);
+        E.statusmsg_is_error = 1;
+    }
     lua_pop(L, 1);
     if (!missing) return;   /* real error in primary — don't try fallback */
 

@@ -7,10 +7,29 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* ── Status message helpers ──────────────────────────────────────────── */
+
+static void status_msg(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+    va_end(ap);
+    E.statusmsg_is_error = 0;
+}
+
+static void status_err(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+    va_end(ap);
+    E.statusmsg_is_error = 1;
+}
 
 /* ── Key reading ─────────────────────────────────────────────────────── */
 
@@ -405,8 +424,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
             insert_rec_reset();
         } else {  /* 'y' */
             int lines = r1 - r0 + 1;
-            snprintf(E.statusmsg, sizeof(E.statusmsg),
-                     "%d line%s yanked", lines, lines != 1 ? "s" : "");
+            status_msg("%d line%s yanked", lines, lines != 1 ? "s" : "");
         }
         return;
     }
@@ -562,8 +580,7 @@ static void visual_op_yank(void) {
     E.cy = r0; E.cx = c0;
     if (linewise) {
         yank_set_lines(r0, r1);
-        snprintf(E.statusmsg, sizeof(E.statusmsg),
-                 "%d line%s yanked", r1 - r0 + 1, r1 - r0 ? "s" : "");
+        status_msg("%d line%s yanked", r1 - r0 + 1, r1 - r0 ? "s" : "");
     } else {
         int end = c1 + 1;
         if (end > E.buf.rows[r0].len) end = E.buf.rows[r0].len;
@@ -777,8 +794,7 @@ void editor_execute_command(void) {
 
     if (strcmp(cmd, "q") == 0) {
         if (E.buf.dirty) {
-            snprintf(E.statusmsg, sizeof(E.statusmsg),
-                     "Unsaved changes (use :q! to override)");
+            status_err("Unsaved changes (use :q! to override)");
         } else {
             editor_quit();
         }
@@ -795,36 +811,78 @@ void editor_execute_command(void) {
             editor_detect_syntax();
         }
         if (!E.buf.filename) {
-            snprintf(E.statusmsg, sizeof(E.statusmsg), "No filename");
+            status_err("No filename");
         } else if (buf_save(&E.buf) == 0) {
-            snprintf(E.statusmsg, sizeof(E.statusmsg),
-                     "\"%s\" written", E.buf.filename);
+            status_msg("\"%s\" written", E.buf.filename);
         } else {
-            snprintf(E.statusmsg, sizeof(E.statusmsg),
-                     "Cannot write \"%s\"", E.buf.filename);
+            status_err("Cannot write \"%s\"", E.buf.filename);
         }
 
     } else if (strcmp(cmd, "wq") == 0) {
         if (!E.buf.filename) {
-            snprintf(E.statusmsg, sizeof(E.statusmsg), "No filename");
+            status_err("No filename");
         } else if (buf_save(&E.buf) == 0) {
             editor_quit();
         } else {
-            snprintf(E.statusmsg, sizeof(E.statusmsg),
-                     "Cannot write \"%s\"", E.buf.filename);
+            status_err("Cannot write \"%s\"", E.buf.filename);
         }
+
+    } else if ((cmd[0] == 'e' && cmd[1] == '\0') ||
+               (cmd[0] == 'e' && cmd[1] == '!' && cmd[2] == '\0') ||
+               (cmd[0] == 'e' && cmd[1] == ' ' && cmd[2]) ||
+               (cmd[0] == 'e' && cmd[1] == '!' && cmd[2] == ' ' && cmd[3])) {
+        /* :e [!] [filename] — open file (! forces past unsaved changes) */
+        int force    = (cmd[1] == '!');
+        const char *arg = force ? (cmd[2] ? cmd + 3 : NULL)
+                                : (cmd[1] == ' ' ? cmd + 2 : NULL);
+
+        /* Unsaved-change guard */
+        if (E.buf.dirty && !force) {
+            status_err("Unsaved changes (use :e! to override)");
+            E.mode = MODE_NORMAL;
+            E.cmdbuf[0] = '\0'; E.cmdlen = 0;
+            return;
+        }
+
+        /* Determine filename: arg if given, otherwise current filename */
+        const char *target = arg ? arg : E.buf.filename;
+        if (!target) {
+            status_err("No filename");
+            E.mode = MODE_NORMAL;
+            E.cmdbuf[0] = '\0'; E.cmdlen = 0;
+            return;
+        }
+
+        /* Duplicate before buf_free (buf.filename is about to be freed) */
+        char *fname = strdup(target);
+
+        /* Discard current buffer state */
+        buf_free(&E.buf);
+        undo_stack_clear(&E.undo_stack);
+        undo_stack_clear(&E.redo_stack);
+        if (E.has_pre_insert) {
+            undo_state_free(&E.pre_insert_snapshot);
+            E.has_pre_insert = 0;
+        }
+        la_free();
+        E.cx = 0; E.cy = 0;
+        E.rowoff = 0; E.coloff = 0;
+
+        buf_open(&E.buf, fname);
+        free(fname);
+        editor_detect_syntax();
+        status_msg("\"%s\"", E.buf.filename);
 
     } else if (strcmp(cmd, "set nu") == 0) {
         E.opts.line_numbers = 1;
-        snprintf(E.statusmsg, sizeof(E.statusmsg), "Line numbers on");
+        status_msg("Line numbers on");
 
     } else if (strcmp(cmd, "set nonu") == 0) {
         E.opts.line_numbers = 0;
-        snprintf(E.statusmsg, sizeof(E.statusmsg), "Line numbers off");
+        status_msg("Line numbers off");
 
     } else if (cmd[0] != '\0') {
-        snprintf(E.statusmsg, sizeof(E.statusmsg),
-                 "Not a command: %.100s", cmd);
+        status_err("Not a command: %.100s", cmd);
     }
 
     E.mode = MODE_NORMAL;
@@ -848,7 +906,7 @@ static void enter_insert_mode(char entry) {
 static void editor_undo(void) {
     UndoState prev;
     if (undo_pop(&E.undo_stack, &prev) == -1) {
-        snprintf(E.statusmsg, sizeof(E.statusmsg), "Already at oldest change");
+        status_err("Already at oldest change");
         return;
     }
     undo_push(&E.redo_stack, editor_capture_state());
@@ -859,7 +917,7 @@ static void editor_undo(void) {
 static void editor_redo(void) {
     UndoState next;
     if (undo_pop(&E.redo_stack, &next) == -1) {
-        snprintf(E.statusmsg, sizeof(E.statusmsg), "Already at newest change");
+        status_err("Already at newest change");
         return;
     }
     undo_push(&E.undo_stack, editor_capture_state());
@@ -869,6 +927,7 @@ static void editor_redo(void) {
 
 static void editor_process_normal(int c) {
     E.statusmsg[0] = '\0';  /* clear one-shot message on any keypress */
+    E.statusmsg_is_error = 0;
     if (lua_bridge_call_key(MODE_NORMAL, c)) return;
 
     /* Accumulate count prefix digits: 1-9 always; 0 only if count already started. */
@@ -1001,7 +1060,7 @@ static void editor_process_normal(int c) {
                 if (search_find_next(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
                     E.cy = row; E.cx = col;
                 } else {
-                    snprintf(E.statusmsg, sizeof(E.statusmsg), "Pattern not found");
+                    status_err("Pattern not found");
                     break;
                 }
             }
@@ -1015,7 +1074,7 @@ static void editor_process_normal(int c) {
                 if (search_find_prev(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
                     E.cy = row; E.cx = col;
                 } else {
-                    snprintf(E.statusmsg, sizeof(E.statusmsg), "Pattern not found");
+                    status_err("Pattern not found");
                     break;
                 }
             }
@@ -1404,8 +1463,7 @@ static void editor_process_search(int c) {
                     E.cy = row;
                     E.cx = col;
                 } else {
-                    snprintf(E.statusmsg, sizeof(E.statusmsg),
-                             "Pattern not found");
+                    status_err("Pattern not found");
                 }
             }
             break;

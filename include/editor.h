@@ -35,6 +35,7 @@ typedef struct {
     char          cmdbuf[256];      /* command-line input */
     int           cmdlen;
     char          statusmsg[128];   /* one-shot message shown in command bar */
+    int           statusmsg_is_error; /* 1 = display in red */
 
     /* Search */
     char          searchbuf[256];   /* live input while in MODE_SEARCH */

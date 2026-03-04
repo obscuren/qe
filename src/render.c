@@ -435,7 +435,11 @@ static void editor_draw_command_bar(AppendBuf *ab) {
             if (E.statusmsg[0]) {
                 int len = (int)strlen(E.statusmsg);
                 if (len > E.screencols) len = E.screencols;
+                if (E.statusmsg_is_error)
+                    ab_append(ab, "\x1b[41;97m", 8);   /* red bg + white fg */
                 ab_append(ab, E.statusmsg, len);
+                if (E.statusmsg_is_error)
+                    ab_append(ab, "\x1b[m", 3);
             }
             break;
     }
