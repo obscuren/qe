@@ -44,6 +44,7 @@ void editor_init(void) {
     E.visual_anchor_col = 0;
 
     E.pending_op    = '\0';
+    E.count         = 0;
     E.yank_rows     = NULL;
     E.yank_numrows  = 0;
     E.yank_linewise = 0;

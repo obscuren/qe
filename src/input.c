@@ -290,48 +290,59 @@ static void push_undo(void) {
     undo_stack_clear(&E.redo_stack);
 }
 
-/* Apply operator op ('d', 'y', or 'c') with the given motion key. */
-static void editor_apply_op(char op, int motion_key) {
+/* Apply operator op ('d', 'y', or 'c') with the given motion key, repeated n times. */
+static void editor_apply_op(char op, int motion_key, int n) {
     if (E.buf.numrows == 0) return;
 
-    /* Doubled operator: linewise on current line (dd / yy / cc). */
+    /* Doubled operator: linewise on n lines starting at cursor (dd/yy/cc + count). */
     if (motion_key == (int)op) {
-        yank_set_lines(E.cy, E.cy);
+        int r0 = E.cy;
+        int r1 = E.cy + n - 1;
+        if (r1 >= E.buf.numrows) r1 = E.buf.numrows - 1;
+        yank_set_lines(r0, r1);
         if (op == 'd') {
             push_undo();
-            buf_delete_row(&E.buf, E.cy);
+            for (int i = r1; i >= r0; i--)
+                buf_delete_row(&E.buf, i);
             if (E.cy >= E.buf.numrows && E.cy > 0) E.cy--;
             E.cx = 0;
         } else if (op == 'c') {
-            /* cc: clear line content, keep the row, enter Insert. */
+            /* cc: delete n lines, keep one empty row, enter Insert. */
             E.pre_insert_snapshot = editor_capture_state();
             E.pre_insert_dirty    = E.buf.dirty;
             E.has_pre_insert      = 1;
-            Row *row  = &E.buf.rows[E.cy];
+            for (int i = r1; i > r0; i--)
+                buf_delete_row(&E.buf, i);
+            Row *row  = &E.buf.rows[r0];
             row->len      = 0;
             row->chars[0] = '\0';
             E.buf.dirty++;
-            buf_mark_hl_dirty(&E.buf, E.cy);
+            buf_mark_hl_dirty(&E.buf, r0);
+            E.cy   = r0;
             E.cx   = 0;
             E.mode = MODE_INSERT;
         } else {  /* 'y' */
-            snprintf(E.statusmsg, sizeof(E.statusmsg), "1 line yanked");
+            int lines = r1 - r0 + 1;
+            snprintf(E.statusmsg, sizeof(E.statusmsg),
+                     "%d line%s yanked", lines, lines != 1 ? "s" : "");
         }
         return;
     }
 
-    /* Compute target position for the motion. */
+    /* Compute target position by applying the motion n times. */
     int tr = E.cy, tc = E.cx;
-    switch (motion_key) {
-        case 'w': pos_word_next(&tr, &tc); break;
-        case 'e': pos_word_end(&tr, &tc);
-                  if (tr == E.cy) tc++;   /* inclusive → exclusive range end */
-                  break;
-        case 'b': pos_word_start(&tr, &tc); break;
-        case '0': tr = E.cy; tc = 0; break;
-        case '$': tr = E.cy; tc = E.buf.rows[E.cy].len; break;
-        default:  return;   /* unknown motion: cancel silently */
+    for (int i = 0; i < n; i++) {
+        switch (motion_key) {
+            case 'w': pos_word_next(&tr, &tc);  break;
+            case 'e': pos_word_end(&tr, &tc);   break;
+            case 'b': pos_word_start(&tr, &tc); break;
+            case '0': tr = E.cy; tc = 0; i = n; break;  /* stop after first */
+            case '$': tr = E.cy; tc = E.buf.rows[E.cy].len; i = n; break;
+            default:  return;   /* unknown motion: cancel silently */
+        }
     }
+    /* For 'e': convert inclusive end to exclusive. */
+    if (motion_key == 'e' && tr == E.cy) tc++;
 
     /* Clamp cross-line motions to the current line boundary. */
     if (tr != E.cy) {
@@ -698,21 +709,39 @@ static void editor_process_normal(int c) {
     E.statusmsg[0] = '\0';  /* clear one-shot message on any keypress */
     if (lua_bridge_call_key(MODE_NORMAL, c)) return;
 
-    /* If an operator is pending (d/y), this key is the motion. */
-    if (E.pending_op) {
-        char op = E.pending_op;
-        E.pending_op = '\0';
-        editor_apply_op(op, c);
+    /* Accumulate count prefix digits: 1-9 always; 0 only if count already started. */
+    if ((c >= '1' && c <= '9') || (c == '0' && E.count > 0)) {
+        E.count = E.count * 10 + (c - '0');
         return;
     }
 
+    /* If an operator is pending, this key is the motion. */
+    if (E.pending_op) {
+        char op      = E.pending_op;
+        E.pending_op = '\0';
+        int n        = E.count > 0 ? E.count : 1;
+        E.count      = 0;
+        editor_apply_op(op, c, n);
+        return;
+    }
+
+    /* Operators: set pending_op WITHOUT consuming count (e.g. 3dd needs it). */
+    if (c == 'd' || c == 'y' || c == 'c') {
+        E.pending_op = (char)c;
+        return;
+    }
+
+    /* Consume count for all other keys. */
+    int raw_count = E.count;
+    int n         = raw_count > 0 ? raw_count : 1;
+    E.count       = 0;
+
     switch (c) {
-        /* --- cancel pending operator --- */
+        /* --- cancel / ESC --- */
         case '\x1b':
-            E.pending_op = '\0';
             break;
 
-        /* --- mode switches --- */
+        /* --- mode switches (count ignored) --- */
         case ':':
             E.mode = MODE_COMMAND;
             E.cmdbuf[0] = '\0';
@@ -730,21 +759,18 @@ static void editor_process_normal(int c) {
             break;
 
         case 'a':
-            /* append: move one right then enter insert */
             if (E.cy < E.buf.numrows && E.cx < E.buf.rows[E.cy].len)
                 E.cx++;
             enter_insert_mode();
             break;
 
         case 'A':
-            /* append at end of line */
             if (E.cy < E.buf.numrows)
                 E.cx = E.buf.rows[E.cy].len;
             enter_insert_mode();
             break;
 
         case 'o': {
-            /* open line below — snapshot covers the row insertion too */
             char ind[256]; int ind_len = 0, extra = 0;
             if (E.opts.autoindent && E.cy < E.buf.numrows) {
                 const Row *r = &E.buf.rows[E.cy];
@@ -755,7 +781,6 @@ static void editor_process_normal(int c) {
             enter_insert_mode();
             int at = E.cy + 1;
             if (at > E.buf.numrows) at = E.buf.numrows;
-            /* Build initial row content: ind + extra spaces. */
             char row_init[512];
             memcpy(row_init, ind, ind_len);
             memset(row_init + ind_len, ' ', extra);
@@ -766,7 +791,6 @@ static void editor_process_normal(int c) {
         }
 
         case 'O': {
-            /* open line above — snapshot covers the row insertion too */
             char ind[256]; int ind_len = 0;
             if (E.opts.autoindent && E.cy < E.buf.numrows)
                 ind_len = row_indent(&E.buf.rows[E.cy], ind, sizeof(ind));
@@ -776,55 +800,62 @@ static void editor_process_normal(int c) {
             break;
         }
 
-        /* --- single-char delete (one undo step each) --- */
+        /* --- x: delete n chars under/after cursor --- */
         case 'x':
             if (E.cy < E.buf.numrows) {
                 Row *row = &E.buf.rows[E.cy];
                 if (E.cx < row->len) {
-                    undo_push(&E.undo_stack, editor_capture_state());
-                    undo_stack_clear(&E.redo_stack);
-                    buf_row_delete_char(row, E.cx);
+                    push_undo();
+                    int del = n;
+                    if (E.cx + del > row->len) del = row->len - E.cx;
+                    for (int i = 0; i < del; i++)
+                        buf_row_delete_char(row, E.cx);
                     E.buf.dirty++;
+                    buf_mark_hl_dirty(&E.buf, E.cy);
                     if (E.cx > 0 && E.cx >= row->len) E.cx--;
                 }
             }
             break;
 
-        /* --- undo / redo --- */
+        /* --- undo / redo (n times) --- */
         case 'u':
-            editor_undo();
+            for (int i = 0; i < n; i++) editor_undo();
             break;
 
         case 'r':
-            editor_redo();
+            for (int i = 0; i < n; i++) editor_redo();
             break;
 
-        /* --- search repeat --- */
+        /* --- search repeat (n times) --- */
         case 'n': {
             if (!E.last_search_valid) break;
-            int row, col;
-            if (search_find_next(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
-                E.cy = row;
-                E.cx = col;
-            } else {
-                snprintf(E.statusmsg, sizeof(E.statusmsg), "Pattern not found");
+            for (int i = 0; i < n; i++) {
+                int row, col;
+                if (search_find_next(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
+                    E.cy = row; E.cx = col;
+                } else {
+                    snprintf(E.statusmsg, sizeof(E.statusmsg), "Pattern not found");
+                    break;
+                }
             }
             break;
         }
 
         case 'N': {
             if (!E.last_search_valid) break;
-            int row, col;
-            if (search_find_prev(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
-                E.cy = row;
-                E.cx = col;
-            } else {
-                snprintf(E.statusmsg, sizeof(E.statusmsg), "Pattern not found");
+            for (int i = 0; i < n; i++) {
+                int row, col;
+                if (search_find_prev(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
+                    E.cy = row; E.cx = col;
+                } else {
+                    snprintf(E.statusmsg, sizeof(E.statusmsg), "Pattern not found");
+                    break;
+                }
             }
             break;
         }
 
-        /* --- visual mode --- */
+        /* --- visual mode (count ignored) --- */
         case 'v':
             E.visual_anchor_row = E.cy;
             E.visual_anchor_col = E.cx;
@@ -837,33 +868,25 @@ static void editor_process_normal(int c) {
             E.mode = MODE_VISUAL_LINE;
             break;
 
-        /* --- operators --- */
-        case 'd':
-        case 'y':
-        case 'c':
-            E.pending_op = (char)c;
-            break;
-
-        /* --- paste --- */
+        /* --- paste n times --- */
         case 'p':
-            editor_paste(0);
+            for (int i = 0; i < n; i++) editor_paste(0);
             break;
 
         case 'P':
-            editor_paste(1);
+            for (int i = 0; i < n; i++) editor_paste(1);
             break;
 
-        /* --- motion --- */
+        /* --- word motions (n times) --- */
         case 'w':
-            editor_move_word_next();
+            for (int i = 0; i < n; i++) editor_move_word_next();
             break;
 
         case 'e':
-            editor_move_word_end();
+            for (int i = 0; i < n; i++) editor_move_word_end();
             break;
 
         case 'E':
-            /* move to end of line (no mode change) */
             if (E.cy < E.buf.numrows) {
                 int len = E.buf.rows[E.cy].len;
                 E.cx = len > 0 ? len - 1 : 0;
@@ -871,14 +894,14 @@ static void editor_process_normal(int c) {
             break;
 
         case 'b':
-            editor_move_word_start();
+            for (int i = 0; i < n; i++) editor_move_word_start();
             break;
 
         case 'B':
-            /* move to start of line (no mode change) */
             E.cx = 0;
             break;
 
+        /* --- line motions (count ignored) --- */
         case '0':
             E.cx = 0;
             break;
@@ -890,19 +913,29 @@ static void editor_process_normal(int c) {
             }
             break;
 
+        /* --- G: nG = go to line n, G = last line --- */
         case 'G':
-            if (E.buf.numrows > 0)
-                E.cy = E.buf.numrows - 1;
+            if (raw_count > 0) {
+                E.cy = raw_count - 1;  /* 1-based input → 0-based index */
+                if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
+                    E.cy = E.buf.numrows - 1;
+            } else {
+                if (E.buf.numrows > 0) E.cy = E.buf.numrows - 1;
+            }
             break;
 
+        /* --- cursor movement (n times) --- */
         case ARROW_UP:    case 'k':
         case ARROW_DOWN:  case 'j':
         case ARROW_LEFT:  case 'h':
         case ARROW_RIGHT: case 'l':
-        case HOME_KEY:
-        case END_KEY:
         case PAGE_UP:
         case PAGE_DOWN:
+            for (int i = 0; i < n; i++) editor_move_cursor(c);
+            break;
+
+        case HOME_KEY:
+        case END_KEY:
             editor_move_cursor(c);
             break;
     }

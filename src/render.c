@@ -374,11 +374,16 @@ static void editor_draw_status_bar(AppendBuf *ab) {
     const char *name = E.buf.filename ? E.buf.filename : "[No Name]";
     int llen = snprintf(left,  sizeof(left),  " %.30s%s",
                         name, E.buf.dirty ? " [+]" : "");
-    int rlen = E.pending_op
-        ? snprintf(right, sizeof(right), "%c    %d,%d ",
-                   E.pending_op, E.cy + 1, E.cx + 1)
-        : snprintf(right, sizeof(right), "%d,%d ",
-                   E.cy + 1, E.cx + 1);
+    char prefix[16] = "";
+    if (E.count > 0 && E.pending_op)
+        snprintf(prefix, sizeof(prefix), "%d%c", E.count, E.pending_op);
+    else if (E.count > 0)
+        snprintf(prefix, sizeof(prefix), "%d", E.count);
+    else if (E.pending_op)
+        snprintf(prefix, sizeof(prefix), "%c", E.pending_op);
+    int rlen = prefix[0]
+        ? snprintf(right, sizeof(right), "%s    %d,%d ", prefix, E.cy + 1, E.cx + 1)
+        : snprintf(right, sizeof(right), "%d,%d ", E.cy + 1, E.cx + 1);
 
     if (llen > E.screencols) llen = E.screencols;
     ab_append(ab, left, llen);

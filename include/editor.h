@@ -63,6 +63,7 @@ typedef struct {
 
     /* Operator-pending state (normal mode) */
     char  pending_op;      /* 'd' or 'y' when waiting for motion; '\0' = none */
+    int   count;           /* accumulated count prefix (0 = none typed yet)   */
 
     /* Yank register (internal clipboard) */
     char **yank_rows;
