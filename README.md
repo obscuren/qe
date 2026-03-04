@@ -50,6 +50,21 @@ Quick Ed is modal, like Vim. The current mode is shown in the command bar at the
 
 ---
 
+## Count prefixes (Normal mode)
+
+Most Normal-mode commands accept a count prefix that repeats or qualifies the action:
+
+```
+3j      move down 3 lines          5w      move forward 5 words
+3dd     delete 3 lines             d3w     delete 3 words
+5G      jump to line 5             3x      delete 3 characters
+3p      paste 3 times              10j     move down 10 lines
+```
+
+The accumulating count and any pending operator are shown live in the status bar.
+
+---
+
 ## Navigation (Normal mode)
 
 | Key              | Action                          |
@@ -66,6 +81,7 @@ Quick Ed is modal, like Vim. The current mode is shown in the command bar at the
 | `0`              | Move to start of line           |
 | `$`              | Move to end of line             |
 | `G`              | Jump to last line               |
+| `{n}G`           | Jump to line n                  |
 | `Page Up/Down`   | Scroll one screen               |
 | `Home` / `End`   | Start / end of line             |
 
@@ -89,12 +105,28 @@ Enter insert mode with `i` (before cursor), `a` (after cursor), `o` (new line be
 | Key        | Action                                         |
 |------------|------------------------------------------------|
 | `x`        | Delete character under cursor                  |
+| `.`        | Repeat last change (count overrides stored count) |
 | `u`        | Undo                                           |
 | `r`        | Redo                                           |
 | `n`        | Repeat search forward                          |
 | `N`        | Repeat search backward                         |
 | `p`        | Paste after cursor / below current line        |
 | `P`        | Paste before cursor / above current line       |
+
+### `.` repeat
+
+`.` re-executes the last buffer-modifying action, including any text typed in the subsequent insert session:
+
+| Original action     | `.` replays                                 |
+|---------------------|---------------------------------------------|
+| `3x`                | Delete 3 chars at cursor again              |
+| `dw` / `3dd`        | Same delete + count                         |
+| `cw` + typed text   | Delete word, re-insert the same text        |
+| `p` / `P`           | Paste again (same direction + count)        |
+| `i` / `a` / `A` + text | Re-insert same text at current position |
+| `o` / `O` + text    | Open new line, re-insert same text          |
+
+A count before `.` (e.g. `5.`) overrides the stored count.
 
 ## Operators (Normal mode)
 
@@ -181,9 +213,9 @@ Type `/` in Normal mode, then enter a pattern and press `Enter`. The cursor jump
 
 ## Syntax Highlighting
 
-Quick Ed highlights keywords, types, strings, numbers, and comments. Language definitions are configured in Lua (see below). Supported out of the box (via `~/.config/qe/init.lua`): **C/C++**, **Lua**.
+Quick Ed highlights keywords, types, strings, numbers, and comments. Language definitions live in `~/.config/qe/languages/` and are loaded by `init.lua`. Supported out of the box: **C/C++**, **Lua**, **Markdown**.
 
-When the cursor is on a bracket (`(`, `)`, `[`, `]`, `{`, `}`), the matching counterpart is highlighted in bold reverse video. The match search crosses line boundaries.
+When the cursor is on a bracket (`(`, `)`, `[`, `]`, `{`, `}`), the matching counterpart is highlighted with a bright blue background and white text. The match search crosses line boundaries.
 
 ---
 
@@ -261,17 +293,39 @@ qe.add_syntax({
 })
 ```
 
+### Language files
+
+Language syntax definitions live in `~/.config/qe/languages/`. Each file calls `qe.add_syntax()` and is loaded from `init.lua` via `require`:
+
+```
+~/.config/qe/
+├── init.lua
+└── languages/
+    ├── c.lua
+    ├── lua_lang.lua
+    └── markdown.lua
+```
+
 ### Full example `~/.config/qe/init.lua`
 
 ```lua
 qe.set_option("tabwidth", 4)
 qe.set_option("line_numbers", true)
 
+-- Load language definitions
+require("languages.c")
+require("languages.lua_lang")
+require("languages.markdown")
+
 -- Save with W in Normal mode
 qe.bind_key("n", "W", function() qe.command("w") end)
+```
 
+### Example `~/.config/qe/languages/c.lua`
+
+```lua
 qe.add_syntax({
-    filetypes = {"c", "h", "cpp", "cc"},
+    filetypes = {"c", "h", "cpp", "cc", "cxx", "hpp"},
     keywords  = {
         "if", "else", "for", "while", "do", "return", "break", "continue",
         "switch", "case", "default", "goto", "sizeof", "typedef", "struct",
