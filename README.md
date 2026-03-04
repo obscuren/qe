@@ -112,8 +112,15 @@ Operators combine with a motion to act on a range of text. Type the operator key
 | `y`        | `0`     | Yank to start of line                   |
 | `y`        | `$`     | Yank to end of line                     |
 | `yy`       |         | Yank current line                       |
+| `c`        | `w`     | Delete to start of next word, enter Insert |
+| `c`        | `e`     | Delete to end of word, enter Insert     |
+| `c`        | `b`     | Delete to start of previous word, enter Insert |
+| `c`        | `0`     | Delete to start of line, enter Insert   |
+| `c`        | `$`     | Delete to end of line, enter Insert     |
+| `cc`       |         | Clear current line, enter Insert        |
 
 Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
+`c` operations are a single undo step — pressing `u` restores the text before the change.
 
 ## Entering Insert mode (Normal mode)
 

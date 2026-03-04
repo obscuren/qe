@@ -290,11 +290,11 @@ static void push_undo(void) {
     undo_stack_clear(&E.redo_stack);
 }
 
-/* Apply operator op ('d' or 'y') with the given motion key. */
+/* Apply operator op ('d', 'y', or 'c') with the given motion key. */
 static void editor_apply_op(char op, int motion_key) {
     if (E.buf.numrows == 0) return;
 
-    /* Doubled operator: linewise on current line (dd / yy). */
+    /* Doubled operator: linewise on current line (dd / yy / cc). */
     if (motion_key == (int)op) {
         yank_set_lines(E.cy, E.cy);
         if (op == 'd') {
@@ -302,7 +302,19 @@ static void editor_apply_op(char op, int motion_key) {
             buf_delete_row(&E.buf, E.cy);
             if (E.cy >= E.buf.numrows && E.cy > 0) E.cy--;
             E.cx = 0;
-        } else {
+        } else if (op == 'c') {
+            /* cc: clear line content, keep the row, enter Insert. */
+            E.pre_insert_snapshot = editor_capture_state();
+            E.pre_insert_dirty    = E.buf.dirty;
+            E.has_pre_insert      = 1;
+            Row *row  = &E.buf.rows[E.cy];
+            row->len      = 0;
+            row->chars[0] = '\0';
+            E.buf.dirty++;
+            buf_mark_hl_dirty(&E.buf, E.cy);
+            E.cx   = 0;
+            E.mode = MODE_INSERT;
+        } else {  /* 'y' */
             snprintf(E.statusmsg, sizeof(E.statusmsg), "1 line yanked");
         }
         return;
@@ -336,8 +348,15 @@ static void editor_apply_op(char op, int motion_key) {
     if (c0 >= c1)  return;
 
     yank_set_chars(E.cy, c0, c1);
-    if (op == 'd') {
-        push_undo();
+    if (op == 'd' || op == 'c') {
+        if (op == 'c') {
+            /* Snapshot before the delete so one 'u' restores the pre-change state. */
+            E.pre_insert_snapshot = editor_capture_state();
+            E.pre_insert_dirty    = E.buf.dirty;
+            E.has_pre_insert      = 1;
+        } else {
+            push_undo();
+        }
         Row *row = &E.buf.rows[E.cy];
         for (int i = c1 - 1; i >= c0; i--)
             buf_row_delete_char(row, i);
@@ -345,6 +364,7 @@ static void editor_apply_op(char op, int motion_key) {
         buf_mark_hl_dirty(&E.buf, E.cy);
         E.cx = c0;
         if (E.cx > E.buf.rows[E.cy].len) E.cx = E.buf.rows[E.cy].len;
+        if (op == 'c') E.mode = MODE_INSERT;
     }
 }
 
@@ -652,6 +672,7 @@ static void editor_process_normal(int c) {
         /* --- operators --- */
         case 'd':
         case 'y':
+        case 'c':
             E.pending_op = (char)c;
             break;
 
