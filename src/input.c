@@ -283,6 +283,50 @@ static void yank_set_chars(int row, int c0, int c1) {
     E.yank_rows[0][len] = '\0';
 }
 
+static void editor_close_bracket(char c);  /* forward declaration */
+
+/* ── . repeat helpers ────────────────────────────────────────────────── */
+
+static void la_free(void) {
+    free(E.last_action.text);
+    E.last_action.text     = NULL;
+    E.last_action.text_len = 0;
+    E.last_action.type     = LA_NONE;
+}
+
+static void insert_rec_reset(void) {
+    E.insert_rec_len = 0;
+}
+
+static void insert_rec_append(char c) {
+    if (E.insert_rec_len + 1 > E.insert_rec_cap) {
+        int cap = E.insert_rec_cap > 0 ? E.insert_rec_cap * 2 : 64;
+        E.insert_rec     = realloc(E.insert_rec, cap);
+        E.insert_rec_cap = cap;
+    }
+    if (E.insert_rec) E.insert_rec[E.insert_rec_len++] = c;
+}
+
+/* Replay previously recorded insert text without changing mode or recording. */
+static void replay_insert_text(const char *text, int len) {
+    for (int i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '\r') {
+            editor_insert_newline();
+        } else if (c == 127) {
+            editor_delete_char();
+        } else if (c == '\t') {
+            int spaces = E.opts.tabwidth - (E.cx % E.opts.tabwidth);
+            for (int j = 0; j < spaces; j++) editor_insert_char(' ');
+        } else if (c >= 32 && c < 127) {
+            if (E.opts.autoindent && is_close_bracket((char)c))
+                editor_close_bracket((char)c);
+            else
+                editor_insert_char((char)c);
+        }
+    }
+}
+
 /* ── Operator + motion ───────────────────────────────────────────────── */
 
 static void push_undo(void) {
@@ -306,6 +350,12 @@ static void editor_apply_op(char op, int motion_key, int n) {
                 buf_delete_row(&E.buf, i);
             if (E.cy >= E.buf.numrows && E.cy > 0) E.cy--;
             E.cx = 0;
+            if (!E.is_replaying) {
+                la_free();
+                E.last_action.type   = LA_DELETE;
+                E.last_action.count  = n;
+                E.last_action.motion = (int)op;  /* doubled: motion == op */
+            }
         } else if (op == 'c') {
             /* cc: delete n lines, keep one empty row, enter Insert. */
             E.pre_insert_snapshot = editor_capture_state();
@@ -321,6 +371,10 @@ static void editor_apply_op(char op, int motion_key, int n) {
             E.cy   = r0;
             E.cx   = 0;
             E.mode = MODE_INSERT;
+            E.insert_entry  = 'c';
+            E.insert_motion = (int)op;  /* doubled */
+            E.insert_count  = n;
+            insert_rec_reset();
         } else {  /* 'y' */
             int lines = r1 - r0 + 1;
             snprintf(E.statusmsg, sizeof(E.statusmsg),
@@ -375,7 +429,18 @@ static void editor_apply_op(char op, int motion_key, int n) {
         buf_mark_hl_dirty(&E.buf, E.cy);
         E.cx = c0;
         if (E.cx > E.buf.rows[E.cy].len) E.cx = E.buf.rows[E.cy].len;
-        if (op == 'c') E.mode = MODE_INSERT;
+        if (op == 'd' && !E.is_replaying) {
+            la_free();
+            E.last_action.type   = LA_DELETE;
+            E.last_action.count  = n;
+            E.last_action.motion = motion_key;
+        } else if (op == 'c') {
+            E.mode          = MODE_INSERT;
+            E.insert_entry  = 'c';
+            E.insert_motion = motion_key;
+            E.insert_count  = n;
+            insert_rec_reset();
+        }
     }
 }
 
@@ -675,12 +740,15 @@ void editor_execute_command(void) {
 
 /* ── Normal mode ─────────────────────────────────────────────────────── */
 
-/* Begin an insert session: snapshot state for undo, then switch mode. */
-static void enter_insert_mode(void) {
+/* Begin an insert session: snapshot state for undo, then switch mode.
+   entry is the key that triggered insert ('i', 'a', 'A', 'o', 'O'). */
+static void enter_insert_mode(char entry) {
     E.pre_insert_snapshot = editor_capture_state();
     E.pre_insert_dirty    = E.buf.dirty;
     E.has_pre_insert      = 1;
     E.mode                = MODE_INSERT;
+    E.insert_entry        = entry;
+    insert_rec_reset();
 }
 
 static void editor_undo(void) {
@@ -755,19 +823,19 @@ static void editor_process_normal(int c) {
             break;
 
         case 'i':
-            enter_insert_mode();
+            enter_insert_mode('i');
             break;
 
         case 'a':
             if (E.cy < E.buf.numrows && E.cx < E.buf.rows[E.cy].len)
                 E.cx++;
-            enter_insert_mode();
+            enter_insert_mode('a');
             break;
 
         case 'A':
             if (E.cy < E.buf.numrows)
                 E.cx = E.buf.rows[E.cy].len;
-            enter_insert_mode();
+            enter_insert_mode('A');
             break;
 
         case 'o': {
@@ -778,7 +846,7 @@ static void editor_process_normal(int c) {
                 if (is_open_bracket(last_nonws(r, r->len)))
                     extra = E.opts.tabwidth;
             }
-            enter_insert_mode();
+            enter_insert_mode('o');
             int at = E.cy + 1;
             if (at > E.buf.numrows) at = E.buf.numrows;
             char row_init[512];
@@ -794,7 +862,7 @@ static void editor_process_normal(int c) {
             char ind[256]; int ind_len = 0;
             if (E.opts.autoindent && E.cy < E.buf.numrows)
                 ind_len = row_indent(&E.buf.rows[E.cy], ind, sizeof(ind));
-            enter_insert_mode();
+            enter_insert_mode('O');
             buf_insert_row(&E.buf, E.cy, ind, ind_len);
             E.cx = ind_len;
             break;
@@ -813,6 +881,11 @@ static void editor_process_normal(int c) {
                     E.buf.dirty++;
                     buf_mark_hl_dirty(&E.buf, E.cy);
                     if (E.cx > 0 && E.cx >= row->len) E.cx--;
+                    if (!E.is_replaying) {
+                        la_free();
+                        E.last_action.type  = LA_X;
+                        E.last_action.count = n;
+                    }
                 }
             }
             break;
@@ -871,11 +944,115 @@ static void editor_process_normal(int c) {
         /* --- paste n times --- */
         case 'p':
             for (int i = 0; i < n; i++) editor_paste(0);
+            if (!E.is_replaying) {
+                la_free();
+                E.last_action.type   = LA_PASTE;
+                E.last_action.count  = n;
+                E.last_action.before = 0;
+            }
             break;
 
         case 'P':
             for (int i = 0; i < n; i++) editor_paste(1);
+            if (!E.is_replaying) {
+                la_free();
+                E.last_action.type   = LA_PASTE;
+                E.last_action.count  = n;
+                E.last_action.before = 1;
+            }
             break;
+
+        /* --- . repeat last change --- */
+        case '.': {
+            if (E.last_action.type == LA_NONE) break;
+            int use_n = raw_count > 0 ? raw_count : E.last_action.count;
+            E.is_replaying = 1;
+            switch (E.last_action.type) {
+                case LA_X: {
+                    if (E.cy >= E.buf.numrows) break;
+                    Row *row = &E.buf.rows[E.cy];
+                    if (E.cx >= row->len) break;
+                    push_undo();
+                    int del = use_n;
+                    if (E.cx + del > row->len) del = row->len - E.cx;
+                    for (int i = 0; i < del; i++)
+                        buf_row_delete_char(row, E.cx);
+                    E.buf.dirty++;
+                    buf_mark_hl_dirty(&E.buf, E.cy);
+                    if (E.cx > 0 && E.cx >= row->len) E.cx--;
+                    break;
+                }
+                case LA_DELETE:
+                    editor_apply_op('d', E.last_action.motion, use_n);
+                    break;
+                case LA_CHANGE: {
+                    editor_apply_op('c', E.last_action.motion, use_n);
+                    /* editor_apply_op('c') entered insert mode and set has_pre_insert. */
+                    if (E.last_action.text && E.last_action.text_len > 0)
+                        replay_insert_text(E.last_action.text, E.last_action.text_len);
+                    if (E.cx > 0) E.cx--;
+                    E.mode = MODE_NORMAL;
+                    if (E.has_pre_insert) {
+                        if (E.buf.dirty != E.pre_insert_dirty)
+                            undo_push(&E.undo_stack, E.pre_insert_snapshot);
+                        else
+                            undo_state_free(&E.pre_insert_snapshot);
+                        E.has_pre_insert = 0;
+                    }
+                    undo_stack_clear(&E.redo_stack);
+                    break;
+                }
+                case LA_PASTE:
+                    for (int i = 0; i < use_n; i++)
+                        editor_paste(E.last_action.before);
+                    break;
+                case LA_INSERT: {
+                    push_undo();
+                    char ent = E.last_action.entry;
+                    if (ent == 'a' && E.cy < E.buf.numrows &&
+                        E.cx < E.buf.rows[E.cy].len) E.cx++;
+                    if (ent == 'A' && E.cy < E.buf.numrows)
+                        E.cx = E.buf.rows[E.cy].len;
+                    if (E.last_action.text && E.last_action.text_len > 0)
+                        replay_insert_text(E.last_action.text, E.last_action.text_len);
+                    if (E.cx > 0) E.cx--;
+                    break;
+                }
+                case LA_OPEN: {
+                    push_undo();
+                    if (E.last_action.open_above) {
+                        char ind[256]; int ind_len = 0;
+                        if (E.opts.autoindent && E.cy < E.buf.numrows)
+                            ind_len = row_indent(&E.buf.rows[E.cy], ind, sizeof(ind));
+                        buf_insert_row(&E.buf, E.cy, ind, ind_len);
+                        E.cx = ind_len;
+                    } else {
+                        char ind[256]; int ind_len = 0, extra = 0;
+                        if (E.opts.autoindent && E.cy < E.buf.numrows) {
+                            const Row *r = &E.buf.rows[E.cy];
+                            ind_len = row_indent(r, ind, sizeof(ind));
+                            if (is_open_bracket(last_nonws(r, r->len)))
+                                extra = E.opts.tabwidth;
+                        }
+                        int at = E.cy + 1;
+                        if (at > E.buf.numrows) at = E.buf.numrows;
+                        char row_init[512];
+                        memcpy(row_init, ind, ind_len);
+                        memset(row_init + ind_len, ' ', extra);
+                        buf_insert_row(&E.buf, at, row_init, ind_len + extra);
+                        E.cy = at;
+                        E.cx = ind_len + extra;
+                    }
+                    if (E.last_action.text && E.last_action.text_len > 0)
+                        replay_insert_text(E.last_action.text, E.last_action.text_len);
+                    if (E.cx > 0) E.cx--;
+                    break;
+                }
+                default: break;
+            }
+            E.is_replaying = 0;
+            break;
+        }
 
         /* --- word motions (n times) --- */
         case 'w':
@@ -969,6 +1146,13 @@ static void editor_close_bracket(char c) {
 
 static void editor_process_insert(int c) {
     if (lua_bridge_call_key(MODE_INSERT, c)) return;
+
+    /* Record keystroke for . repeat (except Escape; not during replay). */
+    if (!E.is_replaying && c != '\x1b') {
+        if (c == '\r' || c == 127 || c == '\t' || (c >= 32 && c < 127))
+            insert_rec_append((char)c);
+    }
+
     switch (c) {
         case '\x1b':
             if (E.cx > 0) E.cx--;  /* nudge left on Escape, like Vim */
@@ -978,6 +1162,32 @@ static void editor_process_insert(int c) {
                 if (E.buf.dirty != E.pre_insert_dirty) {
                     undo_push(&E.undo_stack, E.pre_insert_snapshot);
                     undo_stack_clear(&E.redo_stack);
+                    /* Finalise last_action for . repeat. */
+                    if (!E.is_replaying) {
+                        la_free();
+                        char ent = E.insert_entry;
+                        if (ent == 'c') {
+                            E.last_action.type   = LA_CHANGE;
+                            E.last_action.count  = E.insert_count;
+                            E.last_action.motion = E.insert_motion;
+                        } else if (ent == 'o' || ent == 'O') {
+                            E.last_action.type      = LA_OPEN;
+                            E.last_action.open_above = (ent == 'O');
+                            E.last_action.count     = 1;
+                        } else {
+                            E.last_action.type  = LA_INSERT;
+                            E.last_action.entry = ent;
+                            E.last_action.count = 1;
+                        }
+                        if (E.insert_rec_len > 0) {
+                            E.last_action.text = malloc(E.insert_rec_len);
+                            if (E.last_action.text) {
+                                memcpy(E.last_action.text,
+                                       E.insert_rec, E.insert_rec_len);
+                                E.last_action.text_len = E.insert_rec_len;
+                            }
+                        }
+                    }
                 } else {
                     undo_state_free(&E.pre_insert_snapshot);
                 }

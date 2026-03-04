@@ -65,6 +65,29 @@ typedef struct {
     char  pending_op;      /* 'd' or 'y' when waiting for motion; '\0' = none */
     int   count;           /* accumulated count prefix (0 = none typed yet)   */
 
+    /* . repeat — last repeatable action */
+    struct {
+        enum {
+            LA_NONE, LA_X, LA_DELETE, LA_CHANGE, LA_PASTE, LA_INSERT, LA_OPEN,
+        } type;
+        int   count;
+        int   motion;       /* LA_DELETE / LA_CHANGE: motion key                */
+        int   before;       /* LA_PASTE: 1 = P (before), 0 = p (after)         */
+        char  entry;        /* LA_INSERT: 'i','a','A'; LA_OPEN: 'o','O'         */
+        int   open_above;   /* LA_OPEN: 1 = O, 0 = o                           */
+        char *text;         /* LA_CHANGE / LA_INSERT / LA_OPEN: malloc'd text   */
+        int   text_len;
+    } last_action;
+
+    /* Insert-session recording (for . repeat) */
+    char *insert_rec;
+    int   insert_rec_len;
+    int   insert_rec_cap;
+    char  insert_entry;    /* which key entered insert: i/a/A/o/O/c            */
+    int   insert_motion;   /* for 'c' entry: motion key                        */
+    int   insert_count;    /* for 'c' entry: count used                        */
+    int   is_replaying;    /* 1 while inside repeat_last_action()              */
+
     /* Yank register (internal clipboard) */
     char **yank_rows;
     int    yank_numrows;

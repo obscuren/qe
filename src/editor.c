@@ -45,6 +45,18 @@ void editor_init(void) {
 
     E.pending_op    = '\0';
     E.count         = 0;
+
+    E.last_action.type     = LA_NONE;
+    E.last_action.text     = NULL;
+    E.last_action.text_len = 0;
+    E.insert_rec           = NULL;
+    E.insert_rec_len       = 0;
+    E.insert_rec_cap       = 0;
+    E.insert_entry         = 'i';
+    E.insert_motion        = 0;
+    E.insert_count         = 1;
+    E.is_replaying         = 0;
+
     E.yank_rows     = NULL;
     E.yank_numrows  = 0;
     E.yank_linewise = 0;
