@@ -197,17 +197,30 @@ All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) 
 |------------------|----------------------------------------------|
 | `:w`             | Save                                         |
 | `:w filename`    | Save as filename                             |
-| `:q`             | Quit (fails if unsaved changes)              |
-| `:q!`            | Quit without saving                          |
-| `:wq`            | Save and quit                                |
+| `:q`             | Close current buffer (quit if last)          |
+| `:q!`            | Force close current buffer                   |
+| `:qa`            | Close all buffers (fails if any unsaved)     |
+| `:qa!`           | Force close all buffers and quit             |
+| `:wq`            | Save current buffer and close it             |
+| `:wa`            | Save all dirty buffers                       |
+| `:wqa`           | Save all buffers and quit                    |
+| `:wqa!`          | Save all buffers, force quit regardless      |
 | `:e filename`    | Open file (fails if unsaved changes)         |
 | `:e! filename`   | Open file, discarding unsaved changes        |
 | `:e`             | Reload current file from disk                |
 | `:e!`            | Reload current file, discarding changes      |
+| `:bnew`          | Open a new empty buffer                      |
+| `:bnew filename` | Open file in a new buffer                    |
+| `:bn`            | Switch to next buffer                        |
+| `:bp`            | Switch to previous buffer                    |
+| `:b N`           | Switch to buffer N (1-indexed)               |
+| `:ls`            | List open buffers in status bar              |
 | `:set nu`        | Show line numbers                            |
 | `:set nonu`      | Hide line numbers                            |
 
 Unsaved changes are indicated by `[+]` in the status bar. Commands that would discard them require `!` to confirm.
+
+`:q` closes the current buffer. When only one buffer remains, `:q` quits the editor. The status bar shows `[n/total]` when multiple buffers are open.
 
 ### Tab completion for `:e`
 

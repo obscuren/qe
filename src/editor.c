@@ -68,6 +68,9 @@ void editor_init(void) {
     E.completion_matches = NULL;
     E.completion_count   = 0;
     E.completion_idx     = -1;
+
+    E.num_buftabs = 1;
+    E.cur_buftab  = 0;
 }
 
 void editor_detect_syntax(void) {
@@ -88,6 +91,62 @@ UndoState editor_capture_state(void) {
         s.row_lens[i]  = E.buf.rows[i].len;
     }
     return s;
+}
+
+/* Save the live EditorConfig buffer state into buftabs[i].
+   Uses move semantics: ownership of heap data transfers to the BufTab. */
+void editor_buf_save(int i) {
+    BufTab *t = &E.buftabs[i];
+
+    /* Commit or discard any pending pre-insert snapshot. */
+    if (E.has_pre_insert) {
+        if (E.buf.dirty != E.pre_insert_dirty)
+            undo_push(&E.undo_stack, E.pre_insert_snapshot);
+        else
+            undo_state_free(&E.pre_insert_snapshot);
+        memset(&E.pre_insert_snapshot, 0, sizeof(UndoState));
+        E.has_pre_insert = 0;
+    }
+
+    /* Move buffer — struct copy transfers pointer ownership; zero source. */
+    t->buf = E.buf;
+    memset(&E.buf, 0, sizeof(Buffer));
+    E.buf.hl_dirty_from = INT_MAX;
+
+    t->cx = E.cx; t->cy = E.cy;
+    t->rowoff = E.rowoff; t->coloff = E.coloff;
+
+    /* Move undo stacks — copy fixed array, zero source count. */
+    t->undo_stack = E.undo_stack;  E.undo_stack.count = 0;
+    t->redo_stack = E.redo_stack;  E.redo_stack.count = 0;
+
+    t->pre_insert_snapshot = E.pre_insert_snapshot;
+    t->pre_insert_dirty    = E.pre_insert_dirty;
+    t->has_pre_insert      = E.has_pre_insert;   /* always 0 at this point */
+
+    t->syntax = E.syntax;
+}
+
+/* Restore buftabs[i] into the live EditorConfig buffer state. */
+void editor_buf_restore(int i) {
+    BufTab *t = &E.buftabs[i];
+
+    E.buf = t->buf;
+    memset(&t->buf, 0, sizeof(Buffer));
+
+    E.cx = t->cx; E.cy = t->cy;
+    E.rowoff = t->rowoff; E.coloff = t->coloff;
+
+    E.undo_stack = t->undo_stack;  t->undo_stack.count = 0;
+    E.redo_stack = t->redo_stack;  t->redo_stack.count = 0;
+
+    E.pre_insert_snapshot = t->pre_insert_snapshot;
+    E.pre_insert_dirty    = t->pre_insert_dirty;
+    E.has_pre_insert      = t->has_pre_insert;
+    memset(&t->pre_insert_snapshot, 0, sizeof(UndoState));
+    t->has_pre_insert = 0;
+
+    E.syntax = t->syntax;
 }
 
 void editor_restore_state(const UndoState *s) {

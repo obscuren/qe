@@ -7,6 +7,20 @@
 #include "search.h"
 #include "syntax.h"
 
+#define MAX_BUFS 32
+
+/* Parked state of an inactive buffer (stored while another buffer is live). */
+typedef struct {
+    Buffer    buf;
+    int       cx, cy, rowoff, coloff;
+    UndoStack undo_stack;
+    UndoStack redo_stack;
+    UndoState pre_insert_snapshot;
+    int       pre_insert_dirty;
+    int       has_pre_insert;
+    const SyntaxDef *syntax;
+} BufTab;
+
 typedef enum {
     MODE_NORMAL,
     MODE_INSERT,
@@ -103,6 +117,11 @@ typedef struct {
     char **completion_matches;
     int    completion_count;
     int    completion_idx;   /* -1 = inactive, >= 0 = index of selected match */
+
+    /* Multi-buffer */
+    BufTab buftabs[MAX_BUFS]; /* parked state of all inactive buffers */
+    int    num_buftabs;       /* total open buffers including the live one */
+    int    cur_buftab;        /* 0-based index of the live buffer */
 } EditorConfig;
 
 extern EditorConfig E;
@@ -112,5 +131,8 @@ void editor_detect_syntax(void);
 
 UndoState editor_capture_state(void);
 void      editor_restore_state(const UndoState *s);
+
+void editor_buf_save(int i);
+void editor_buf_restore(int i);
 
 #endif

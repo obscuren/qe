@@ -790,74 +790,216 @@ static void editor_quit(void) {
     exit(EXIT_SUCCESS);
 }
 
+/* ── Multi-buffer helpers ────────────────────────────────────────────── */
+
+static void completion_free(void);   /* forward declaration — defined below */
+
+/* Clear transient editing state and switch the live slot to idx. */
+static void switch_to_buf(int idx) {
+    editor_buf_save(E.cur_buftab);
+    la_free();
+    insert_rec_reset();
+    completion_free();
+    E.pending_op          = '\0';
+    E.count               = 0;
+    E.match_bracket_valid = 0;
+    E.statusmsg[0]        = '\0';
+    E.statusmsg_is_error  = 0;
+    E.mode                = MODE_NORMAL;
+    E.cur_buftab          = idx;
+    editor_buf_restore(idx);
+}
+
+/* Open a new buffer (empty if filename==NULL) and switch to it. */
+static int open_new_buf(const char *filename) {
+    if (E.num_buftabs >= MAX_BUFS) {
+        status_err("Too many open buffers (max %d)", MAX_BUFS);
+        return 0;
+    }
+    int idx = E.num_buftabs++;
+    memset(&E.buftabs[idx], 0, sizeof(BufTab));
+    switch_to_buf(idx);   /* saves current, clears transient, activates new slot */
+    buf_init(&E.buf);
+    if (filename) {
+        buf_open(&E.buf, filename);
+        editor_detect_syntax();
+        status_msg("\"%s\"", E.buf.filename ? E.buf.filename : filename);
+    }
+    return 1;
+}
+
+/* Close the current buffer.  force=0 guards against unsaved changes.
+   Returns 1 if the editor should quit (last buffer was closed). */
+static int close_cur_buf(int force) {
+    if (!force && E.buf.dirty) {
+        status_err("Unsaved changes (use :q! to override)");
+        return 0;
+    }
+    if (E.num_buftabs == 1)
+        return 1;   /* last buffer — tell caller to quit */
+
+    /* Free current live resources. */
+    buf_free(&E.buf);
+    undo_stack_clear(&E.undo_stack);
+    undo_stack_clear(&E.redo_stack);
+    if (E.has_pre_insert) {
+        undo_state_free(&E.pre_insert_snapshot);
+        E.has_pre_insert = 0;
+    }
+    la_free();
+    insert_rec_reset();
+    completion_free();
+    E.pending_op = '\0';
+    E.count      = 0;
+
+    /* Remove cur_buftab slot from the parked array by shifting. */
+    int cur = E.cur_buftab;
+    for (int i = cur; i < E.num_buftabs - 1; i++)
+        E.buftabs[i] = E.buftabs[i + 1];
+    memset(&E.buftabs[E.num_buftabs - 1], 0, sizeof(BufTab));
+    E.num_buftabs--;
+
+    int next = (cur < E.num_buftabs) ? cur : E.num_buftabs - 1;
+    E.cur_buftab = next;
+    editor_buf_restore(next);
+    E.mode = MODE_NORMAL;
+    return 0;
+}
+
 void editor_execute_command(void) {
     const char *cmd = E.cmdbuf;
 
-    if (strcmp(cmd, "q") == 0) {
-        if (E.buf.dirty) {
-            status_err("Unsaved changes (use :q! to override)");
-        } else {
-            editor_quit();
+    /* ── w/q/a/! compound family ──────────────────────────────────────
+       Parses any combination of:
+         [w][q][a][!][ filename]
+       e.g. :w  :q  :wq  :qa  :wqa  :wqa!  :wa  etc.             */
+    {
+        const char *p = cmd;
+        int dw = (*p == 'w'); if (dw) p++;
+        int dq = (*p == 'q'); if (dq) p++;
+        int da = (*p == 'a'); if (da) p++;
+        int df = (*p == '!'); if (df) p++;
+        const char *arg = (*p == ' ' && p[1]) ? p + 1 : NULL;
+
+        if ((dw || dq) && (*p == '\0' || arg)) {
+
+            /* ── write ─────────────────────────────────────────────── */
+            if (dw) {
+                if (da) {
+                    /* :wa / :wqa[!] — write every dirty buffer */
+                    int errs = 0;
+                    if (E.buf.dirty) {
+                        if (!E.buf.filename) {
+                            status_err("Buffer %d has no filename",
+                                       E.cur_buftab + 1);
+                            errs++;
+                        } else if (buf_save(&E.buf) != 0) {
+                            status_err("Cannot write \"%s\"", E.buf.filename);
+                            errs++;
+                        }
+                    }
+                    for (int i = 0; i < E.num_buftabs; i++) {
+                        if (i == E.cur_buftab) continue;
+                        Buffer *b = &E.buftabs[i].buf;
+                        if (b->dirty) {
+                            if (!b->filename) {
+                                status_err("Buffer %d has no filename", i + 1);
+                                errs++;
+                            } else if (buf_save(b) != 0) {
+                                status_err("Cannot write \"%s\"", b->filename);
+                                errs++;
+                            }
+                        }
+                    }
+                    if (!errs && !dq) status_msg("All buffers written");
+                    if (errs && !df) goto done; /* abort before quit */
+                } else {
+                    /* :w / :wq[!] — write current buffer */
+                    if (arg) {
+                        free(E.buf.filename);
+                        E.buf.filename = strdup(arg);
+                        editor_detect_syntax();
+                    }
+                    if (!E.buf.filename) {
+                        status_err("No filename");
+                        goto done;
+                    }
+                    if (buf_save(&E.buf) == 0) {
+                        if (!dq) status_msg("\"%s\" written", E.buf.filename);
+                    } else {
+                        status_err("Cannot write \"%s\"", E.buf.filename);
+                        if (!df) goto done;
+                    }
+                }
+            }
+
+            /* ── quit ──────────────────────────────────────────────── */
+            if (dq) {
+                if (da) {
+                    /* :qa / :wqa[!] — quit everything */
+                    if (!df) {
+                        /* Collect names of still-dirty buffers */
+                        char dirty_list[96] = "";
+                        int  dirty_count = 0, pos = 0;
+                        if (E.buf.dirty) {
+                            const char *fn = E.buf.filename
+                                             ? E.buf.filename : "[No Name]";
+                            const char *b = strrchr(fn, '/');
+                            pos += snprintf(dirty_list + pos,
+                                            sizeof(dirty_list) - pos,
+                                            "%s ", b ? b + 1 : fn);
+                            dirty_count++;
+                        }
+                        for (int i = 0; i < E.num_buftabs; i++) {
+                            if (i == E.cur_buftab) continue;
+                            if (E.buftabs[i].buf.dirty) {
+                                const char *fn = E.buftabs[i].buf.filename
+                                                 ? E.buftabs[i].buf.filename
+                                                 : "[No Name]";
+                                const char *b = strrchr(fn, '/');
+                                pos += snprintf(dirty_list + pos,
+                                                sizeof(dirty_list) - pos,
+                                                "%s ", b ? b + 1 : fn);
+                                dirty_count++;
+                            }
+                        }
+                        if (dirty_count > 0) {
+                            if (pos > 0 && dirty_list[pos - 1] == ' ')
+                                dirty_list[pos - 1] = '\0';
+                            status_err("%d unsaved buffer%s (use :qa! to override): %s",
+                                       dirty_count,
+                                       dirty_count > 1 ? "s" : "",
+                                       dirty_list);
+                            goto done;
+                        }
+                    }
+                    editor_quit();
+                } else {
+                    /* :q / :wq[!] — quit current buffer */
+                    if (close_cur_buf(df)) editor_quit();
+                }
+            }
+            goto done;
         }
+    }
 
-    } else if (strcmp(cmd, "q!") == 0) {
-        editor_quit();
+    /* ── :e [!] [filename] ─────────────────────────────────────────── */
+    if ((cmd[0] == 'e') &&
+        (cmd[1] == '\0' || cmd[1] == '!' || cmd[1] == ' ')) {
+        int force = (cmd[1] == '!');
+        const char *arg = force ? (cmd[2] == ' ' && cmd[3] ? cmd + 3 : NULL)
+                                : (cmd[1] == ' ' && cmd[2]  ? cmd + 2 : NULL);
 
-    } else if (strcmp(cmd, "w") == 0 ||
-               (cmd[0] == 'w' && cmd[1] == ' ' && cmd[2])) {
-        /* :w [filename] */
-        if (cmd[1] == ' ' && cmd[2]) {
-            free(E.buf.filename);
-            E.buf.filename = strdup(cmd + 2);
-            editor_detect_syntax();
-        }
-        if (!E.buf.filename) {
-            status_err("No filename");
-        } else if (buf_save(&E.buf) == 0) {
-            status_msg("\"%s\" written", E.buf.filename);
-        } else {
-            status_err("Cannot write \"%s\"", E.buf.filename);
-        }
-
-    } else if (strcmp(cmd, "wq") == 0) {
-        if (!E.buf.filename) {
-            status_err("No filename");
-        } else if (buf_save(&E.buf) == 0) {
-            editor_quit();
-        } else {
-            status_err("Cannot write \"%s\"", E.buf.filename);
-        }
-
-    } else if ((cmd[0] == 'e' && cmd[1] == '\0') ||
-               (cmd[0] == 'e' && cmd[1] == '!' && cmd[2] == '\0') ||
-               (cmd[0] == 'e' && cmd[1] == ' ' && cmd[2]) ||
-               (cmd[0] == 'e' && cmd[1] == '!' && cmd[2] == ' ' && cmd[3])) {
-        /* :e [!] [filename] — open file (! forces past unsaved changes) */
-        int force    = (cmd[1] == '!');
-        const char *arg = force ? (cmd[2] ? cmd + 3 : NULL)
-                                : (cmd[1] == ' ' ? cmd + 2 : NULL);
-
-        /* Unsaved-change guard */
         if (E.buf.dirty && !force) {
             status_err("Unsaved changes (use :e! to override)");
-            E.mode = MODE_NORMAL;
-            E.cmdbuf[0] = '\0'; E.cmdlen = 0;
-            return;
+            goto done;
         }
-
-        /* Determine filename: arg if given, otherwise current filename */
         const char *target = arg ? arg : E.buf.filename;
         if (!target) {
             status_err("No filename");
-            E.mode = MODE_NORMAL;
-            E.cmdbuf[0] = '\0'; E.cmdlen = 0;
-            return;
+            goto done;
         }
-
-        /* Duplicate before buf_free (buf.filename is about to be freed) */
         char *fname = strdup(target);
-
-        /* Discard current buffer state */
         buf_free(&E.buf);
         undo_stack_clear(&E.undo_stack);
         undo_stack_clear(&E.redo_stack);
@@ -868,12 +1010,58 @@ void editor_execute_command(void) {
         la_free();
         E.cx = 0; E.cy = 0;
         E.rowoff = 0; E.coloff = 0;
-
         buf_open(&E.buf, fname);
         free(fname);
         editor_detect_syntax();
         status_msg("\"%s\"", E.buf.filename);
 
+    /* ── :bnew [filename] ──────────────────────────────────────────── */
+    } else if (strcmp(cmd, "bnew") == 0 ||
+               (cmd[0] == 'b' && cmd[1] == 'n' && cmd[2] == 'e' &&
+                cmd[3] == 'w' && cmd[4] == ' ' && cmd[5])) {
+        open_new_buf(cmd[4] == ' ' ? cmd + 5 : NULL);
+
+    /* ── :bn / :bp / :b N ──────────────────────────────────────────── */
+    } else if (strcmp(cmd, "bn") == 0) {
+        switch_to_buf((E.cur_buftab + 1) % E.num_buftabs);
+        status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs);
+
+    } else if (strcmp(cmd, "bp") == 0) {
+        switch_to_buf((E.cur_buftab - 1 + E.num_buftabs) % E.num_buftabs);
+        status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs);
+
+    } else if (cmd[0] == 'b' && cmd[1] == ' ' && cmd[2] >= '1') {
+        int n = atoi(cmd + 2) - 1;
+        if (n < 0 || n >= E.num_buftabs)
+            status_err("No buffer %d", n + 1);
+        else {
+            switch_to_buf(n);
+            status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs);
+        }
+
+    /* ── :ls ───────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "ls") == 0) {
+        char msg[128];
+        int pos = 0;
+        for (int i = 0; i < E.num_buftabs && pos < (int)sizeof(msg) - 1; i++) {
+            const char *fn = (i == E.cur_buftab)
+                ? (E.buf.filename          ? E.buf.filename          : "[No Name]")
+                : (E.buftabs[i].buf.filename ? E.buftabs[i].buf.filename : "[No Name]");
+            int  dirty = (i == E.cur_buftab) ? E.buf.dirty
+                                             : E.buftabs[i].buf.dirty;
+            const char *base = strrchr(fn, '/');
+            base = base ? base + 1 : fn;
+            if (i == E.cur_buftab)
+                pos += snprintf(msg + pos, sizeof(msg) - pos,
+                                "[%d:%s%s] ", i + 1, base, dirty ? "+" : "");
+            else
+                pos += snprintf(msg + pos, sizeof(msg) - pos,
+                                "%d:%s%s ", i + 1, base, dirty ? "+" : "");
+        }
+        if (pos > 0 && msg[pos - 1] == ' ') msg[pos - 1] = '\0';
+        status_msg("%s", msg);
+
+    /* ── :set ──────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "set nu") == 0) {
         E.opts.line_numbers = 1;
         status_msg("Line numbers on");
@@ -886,7 +1074,8 @@ void editor_execute_command(void) {
         status_err("Not a command: %.100s", cmd);
     }
 
-    E.mode = MODE_NORMAL;
+done:
+    E.mode      = MODE_NORMAL;
     E.cmdbuf[0] = '\0';
     E.cmdlen    = 0;
 }

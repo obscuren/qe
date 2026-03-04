@@ -393,8 +393,11 @@ static void editor_draw_status_bar(AppendBuf *ab) {
 
     char left[128], right[32];
     const char *name = E.buf.filename ? E.buf.filename : "[No Name]";
-    int llen = snprintf(left,  sizeof(left),  " %.30s%s",
-                        name, E.buf.dirty ? " [+]" : "");
+    char bufnum[32] = "";
+    if (E.num_buftabs > 1)
+        snprintf(bufnum, sizeof(bufnum), " [%d/%d]", E.cur_buftab + 1, E.num_buftabs);
+    int llen = snprintf(left, sizeof(left), " %.30s%s%s",
+                        name, E.buf.dirty ? " [+]" : "", bufnum);
     char prefix[16] = "";
     if (E.count > 0 && E.pending_op)
         snprintf(prefix, sizeof(prefix), "%d%c", E.count, E.pending_op);
