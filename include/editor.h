@@ -54,6 +54,14 @@ typedef struct {
     int match_bracket_valid;
     int match_bracket_row;
     int match_bracket_col;
+
+    /* Operator-pending state (normal mode) */
+    char  pending_op;      /* 'd' or 'y' when waiting for motion; '\0' = none */
+
+    /* Yank register (internal clipboard) */
+    char **yank_rows;
+    int    yank_numrows;
+    int    yank_linewise;  /* 1 = line-oriented (dd/yy), 0 = char-oriented */
 } EditorConfig;
 
 extern EditorConfig E;

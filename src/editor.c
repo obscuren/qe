@@ -39,6 +39,11 @@ void editor_init(void) {
 
     E.syntax = NULL;
     E.match_bracket_valid = 0;
+
+    E.pending_op    = '\0';
+    E.yank_rows     = NULL;
+    E.yank_numrows  = 0;
+    E.yank_linewise = 0;
 }
 
 void editor_detect_syntax(void) {

@@ -56,6 +56,7 @@ Quick Ed is modal, like Vim. The current mode is shown in the command bar at the
 | `l` / `→`        | Move right                      |
 | `k` / `↑`        | Move up                         |
 | `j` / `↓`        | Move down                       |
+| `w`              | Move to start of next word      |
 | `e`              | Move to end of next word        |
 | `E`              | Move to end of line             |
 | `b`              | Move to start of previous word  |
@@ -83,13 +84,36 @@ Enter insert mode with `i` (before cursor), `a` (after cursor), `o` (new line be
 
 ## Normal mode commands
 
-| Key  | Action                          |
-|------|---------------------------------|
-| `x`  | Delete character under cursor   |
-| `u`  | Undo                            |
-| `r`  | Redo                            |
-| `n`  | Repeat search forward           |
-| `N`  | Repeat search backward          |
+| Key        | Action                                         |
+|------------|------------------------------------------------|
+| `x`        | Delete character under cursor                  |
+| `u`        | Undo                                           |
+| `r`        | Redo                                           |
+| `n`        | Repeat search forward                          |
+| `N`        | Repeat search backward                         |
+| `p`        | Paste after cursor / below current line        |
+| `P`        | Paste before cursor / above current line       |
+
+## Operators (Normal mode)
+
+Operators combine with a motion to act on a range of text. Type the operator key then a motion key.
+
+| Operator   | Motion  | Action                                  |
+|------------|---------|-----------------------------------------|
+| `d`        | `w`     | Delete to start of next word            |
+| `d`        | `e`     | Delete to end of word (inclusive)       |
+| `d`        | `b`     | Delete to start of previous word        |
+| `d`        | `0`     | Delete to start of line                 |
+| `d`        | `$`     | Delete to end of line                   |
+| `dd`       |         | Delete current line                     |
+| `y`        | `w`     | Yank (copy) to start of next word       |
+| `y`        | `e`     | Yank to end of word (inclusive)         |
+| `y`        | `b`     | Yank to start of previous word          |
+| `y`        | `0`     | Yank to start of line                   |
+| `y`        | `$`     | Yank to end of line                     |
+| `yy`       |         | Yank current line                       |
+
+Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
 
 ## Entering Insert mode (Normal mode)
 
