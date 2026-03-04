@@ -254,6 +254,33 @@ static void editor_move_word_end(void)   { if (E.buf.numrows) pos_word_end(&E.cy
 static void editor_move_word_start(void) { if (E.buf.numrows) pos_word_start(&E.cy, &E.cx); }
 static void editor_move_word_next(void)  { if (E.buf.numrows) pos_word_next(&E.cy, &E.cx);  }
 
+/* Find the nth occurrence of target on the current line using f/F/t/T semantics.
+   Updates *c in place; *r is unchanged (f/F/t/T are line-bound).
+   Returns 1 if found, 0 if not. */
+static int pos_find_char(int *r, int *c, char key, char target, int n) {
+    if (*r >= E.buf.numrows) return 0;
+    const char *line = E.buf.rows[*r].chars;
+    int len = E.buf.rows[*r].len;
+    int cnt = 0;
+
+    if (key == 'f' || key == 't') {
+        for (int i = *c + 1; i < len; i++) {
+            if (line[i] == target && ++cnt == n) {
+                *c = (key == 'f') ? i : i - 1;
+                return 1;
+            }
+        }
+    } else {  /* F or T */
+        for (int i = *c - 1; i >= 0; i--) {
+            if (line[i] == target && ++cnt == n) {
+                *c = (key == 'F') ? i : i + 1;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* ── Yank register ───────────────────────────────────────────────────── */
 
 static void yank_free(void) {
@@ -289,9 +316,10 @@ static void editor_close_bracket(char c);  /* forward declaration */
 
 static void la_free(void) {
     free(E.last_action.text);
-    E.last_action.text     = NULL;
-    E.last_action.text_len = 0;
-    E.last_action.type     = LA_NONE;
+    E.last_action.text        = NULL;
+    E.last_action.text_len    = 0;
+    E.last_action.find_target = '\0';
+    E.last_action.type        = LA_NONE;
 }
 
 static void insert_rec_reset(void) {
@@ -383,20 +411,58 @@ static void editor_apply_op(char op, int motion_key, int n) {
         return;
     }
 
-    /* Compute target position by applying the motion n times. */
+    /* Compute target position for the motion. */
     int tr = E.cy, tc = E.cx;
-    for (int i = 0; i < n; i++) {
-        switch (motion_key) {
-            case 'w': pos_word_next(&tr, &tc);  break;
-            case 'e': pos_word_end(&tr, &tc);   break;
-            case 'b': pos_word_start(&tr, &tc); break;
-            case '0': tr = E.cy; tc = 0; i = n; break;  /* stop after first */
-            case '$': tr = E.cy; tc = E.buf.rows[E.cy].len; i = n; break;
-            default:  return;   /* unknown motion: cancel silently */
+
+    /* f/F/t/T and ;/, are line-bound — handled before the word-motion loop. */
+    if (motion_key == 'f' || motion_key == 'F' ||
+        motion_key == 't' || motion_key == 'T' ||
+        motion_key == ';' || motion_key == ',') {
+
+        char fkey, ftarget;
+
+        if (motion_key == ';' || motion_key == ',') {
+            if (!E.last_find_key) return;
+            fkey = (motion_key == ';') ? E.last_find_key
+                 : (E.last_find_key == 'f') ? 'F'
+                 : (E.last_find_key == 'F') ? 'f'
+                 : (E.last_find_key == 't') ? 'T' : 't';
+            ftarget = E.last_find_target;
+            motion_key = (int)fkey;  /* normalise for last_action recording */
+        } else {
+            fkey = (char)motion_key;
+            if (E.is_replaying) {
+                ftarget = E.last_action.find_target;
+            } else {
+                int tk = editor_read_key();
+                if (tk == '\x1b') return;
+                ftarget = (char)tk;
+                E.last_find_key    = fkey;
+                E.last_find_target = ftarget;
+            }
         }
+
+        if (!pos_find_char(&tr, &tc, fkey, ftarget, n)) return;
+        if (fkey == 'f' || fkey == 'F') tc++;  /* inclusive → exclusive */
+
+        /* Store find target in last_action (set after the delete/yank below). */
+        if (!E.is_replaying) E.last_action.find_target = ftarget;
+
+    } else {
+        /* Word motions: apply n times. */
+        for (int i = 0; i < n; i++) {
+            switch (motion_key) {
+                case 'w': pos_word_next(&tr, &tc);  break;
+                case 'e': pos_word_end(&tr, &tc);   break;
+                case 'b': pos_word_start(&tr, &tc); break;
+                case '0': tr = E.cy; tc = 0; i = n; break;
+                case '$': tr = E.cy; tc = E.buf.rows[E.cy].len; i = n; break;
+                default:  return;
+            }
+        }
+        /* For 'e': convert inclusive end to exclusive. */
+        if (motion_key == 'e' && tr == E.cy) tc++;
     }
-    /* For 'e': convert inclusive end to exclusive. */
-    if (motion_key == 'e' && tr == E.cy) tc++;
 
     /* Clamp cross-line motions to the current line boundary. */
     if (tr != E.cy) {
@@ -597,6 +663,34 @@ static void editor_process_visual(int c) {
             break;
 
         /* Cursor movement — same keys as normal mode. */
+        case 'f': case 'F': case 't': case 'T': {
+            int tk = editor_read_key();
+            if (tk == '\x1b') break;
+            char fkey = (char)c, ftarget = (char)tk;
+            E.last_find_key    = fkey;
+            E.last_find_target = ftarget;
+            int r = E.cy, col = E.cx;
+            if (pos_find_char(&r, &col, fkey, ftarget, 1))
+                E.cx = col;
+            break;
+        }
+        case ';': {
+            if (!E.last_find_key) break;
+            int r = E.cy, col = E.cx;
+            if (pos_find_char(&r, &col, E.last_find_key, E.last_find_target, 1))
+                E.cx = col;
+            break;
+        }
+        case ',': {
+            if (!E.last_find_key) break;
+            char rev = (E.last_find_key == 'f') ? 'F'
+                     : (E.last_find_key == 'F') ? 'f'
+                     : (E.last_find_key == 't') ? 'T' : 't';
+            int r = E.cy, col = E.cx;
+            if (pos_find_char(&r, &col, rev, E.last_find_target, 1))
+                E.cx = col;
+            break;
+        }
         case 'w': editor_move_word_next(); break;
         case 'e': editor_move_word_end();  break;
         case 'b': editor_move_word_start(); break;
@@ -1051,6 +1145,38 @@ static void editor_process_normal(int c) {
                 default: break;
             }
             E.is_replaying = 0;
+            break;
+        }
+
+        /* --- f/F/t/T: find char on line; ;/, repeat --- */
+        case 'f': case 'F': case 't': case 'T': {
+            int tk = editor_read_key();
+            if (tk == '\x1b') break;
+            char fkey = (char)c, ftarget = (char)tk;
+            E.last_find_key    = fkey;
+            E.last_find_target = ftarget;
+            int r = E.cy, col = E.cx;
+            if (pos_find_char(&r, &col, fkey, ftarget, n))
+                E.cx = col;
+            break;
+        }
+
+        case ';': {
+            if (!E.last_find_key) break;
+            int r = E.cy, col = E.cx;
+            if (pos_find_char(&r, &col, E.last_find_key, E.last_find_target, n))
+                E.cx = col;
+            break;
+        }
+
+        case ',': {
+            if (!E.last_find_key) break;
+            char rev = (E.last_find_key == 'f') ? 'F'
+                     : (E.last_find_key == 'F') ? 'f'
+                     : (E.last_find_key == 't') ? 'T' : 't';
+            int r = E.cy, col = E.cx;
+            if (pos_find_char(&r, &col, rev, E.last_find_target, n))
+                E.cx = col;
             break;
         }
 

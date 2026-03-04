@@ -72,12 +72,17 @@ typedef struct {
         } type;
         int   count;
         int   motion;       /* LA_DELETE / LA_CHANGE: motion key                */
+        char  find_target;  /* LA_DELETE / LA_CHANGE when motion is f/F/t/T    */
         int   before;       /* LA_PASTE: 1 = P (before), 0 = p (after)         */
         char  entry;        /* LA_INSERT: 'i','a','A'; LA_OPEN: 'o','O'         */
         int   open_above;   /* LA_OPEN: 1 = O, 0 = o                           */
         char *text;         /* LA_CHANGE / LA_INSERT / LA_OPEN: malloc'd text   */
         int   text_len;
     } last_action;
+
+    /* Last f/F/t/T search (for ; and , repeat) */
+    char last_find_key;    /* 'f', 'F', 't', 'T', or '\0' = none */
+    char last_find_target; /* the character that was searched for */
 
     /* Insert-session recording (for . repeat) */
     char *insert_rec;

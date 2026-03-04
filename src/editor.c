@@ -46,9 +46,12 @@ void editor_init(void) {
     E.pending_op    = '\0';
     E.count         = 0;
 
-    E.last_action.type     = LA_NONE;
-    E.last_action.text     = NULL;
-    E.last_action.text_len = 0;
+    E.last_action.type        = LA_NONE;
+    E.last_action.text        = NULL;
+    E.last_action.text_len    = 0;
+    E.last_action.find_target = '\0';
+    E.last_find_key           = '\0';
+    E.last_find_target        = '\0';
     E.insert_rec           = NULL;
     E.insert_rec_len       = 0;
     E.insert_rec_cap       = 0;

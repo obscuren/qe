@@ -82,6 +82,12 @@ The accumulating count and any pending operator are shown live in the status bar
 | `$`              | Move to end of line             |
 | `G`              | Jump to last line               |
 | `{n}G`           | Jump to line n                  |
+| `f{char}`        | Jump to next `char` on line     |
+| `F{char}`        | Jump to prev `char` on line     |
+| `t{char}`        | Jump to just before next `char` |
+| `T{char}`        | Jump to just after prev `char`  |
+| `;`              | Repeat last f/F/t/T forward     |
+| `,`              | Repeat last f/F/t/T backward    |
 | `Page Up/Down`   | Scroll one screen               |
 | `Home` / `End`   | Start / end of line             |
 
@@ -152,6 +158,8 @@ Operators combine with a motion to act on a range of text. Type the operator key
 | `c`        | `0`     | Delete to start of line, enter Insert   |
 | `c`        | `$`     | Delete to end of line, enter Insert     |
 | `cc`       |         | Clear current line, enter Insert        |
+
+All motions also work after operators: `df,` deletes to the next comma, `ct"` changes to the next quote, `y3f.` yanks up to the 3rd period, etc.
 
 Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
 `c` operations are a single undo step — pressing `u` restores the text before the change.
