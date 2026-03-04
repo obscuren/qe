@@ -557,6 +557,11 @@ static void editor_process_normal(int c) {
     }
 
     switch (c) {
+        /* --- cancel pending operator --- */
+        case '\x1b':
+            E.pending_op = '\0';
+            break;
+
         /* --- mode switches --- */
         case ':':
             E.mode = MODE_COMMAND;

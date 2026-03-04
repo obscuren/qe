@@ -317,8 +317,11 @@ static void editor_draw_status_bar(AppendBuf *ab) {
     const char *name = E.buf.filename ? E.buf.filename : "[No Name]";
     int llen = snprintf(left,  sizeof(left),  " %.30s%s",
                         name, E.buf.dirty ? " [+]" : "");
-    int rlen = snprintf(right, sizeof(right), "%d,%d ",
-                        E.cy + 1, E.cx + 1);
+    int rlen = E.pending_op
+        ? snprintf(right, sizeof(right), "%c    %d,%d ",
+                   E.pending_op, E.cy + 1, E.cx + 1)
+        : snprintf(right, sizeof(right), "%d,%d ",
+                   E.cy + 1, E.cx + 1);
 
     if (llen > E.screencols) llen = E.screencols;
     ab_append(ab, left, llen);
