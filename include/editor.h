@@ -116,6 +116,7 @@ typedef struct {
     char  insert_entry;    /* which key entered insert: i/a/A/o/O/c            */
     int   insert_motion;   /* for 'c' entry: motion key                        */
     int   insert_count;    /* for 'c' entry: count used                        */
+    int   insert_find_target; /* for 'c' + text-obj: the object char           */
     int   is_replaying;    /* 1 while inside repeat_last_action()              */
 
     /* Yank register (internal clipboard) */

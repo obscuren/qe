@@ -446,9 +446,232 @@ static void indent_lines(int r0, int r1, char dir) {
     }
 }
 
+/* ── Text objects ────────────────────────────────────────────────────── */
+
+/* iw/aw: word under cursor.  Half-open range [c0,c1) on row E.cy. */
+static int text_obj_word(char ia, int *r0, int *c0, int *r1, int *c1) {
+    if (E.buf.numrows == 0) return 0;
+    Row *rw = &E.buf.rows[E.cy];
+    if (rw->len == 0) return 0;
+    int cx = E.cx < rw->len ? E.cx : rw->len - 1;
+    int cc = char_class(rw->chars[cx]);
+    int start = cx, end = cx;
+    while (start > 0 && char_class(rw->chars[start - 1]) == cc) start--;
+    while (end + 1 < rw->len && char_class(rw->chars[end + 1]) == cc) end++;
+    if (ia == 'a') {
+        /* prefer trailing whitespace; fall back to leading */
+        if (end + 1 < rw->len && char_class(rw->chars[end + 1]) == 0)
+            while (end + 1 < rw->len && char_class(rw->chars[end + 1]) == 0) end++;
+        else
+            while (start > 0 && char_class(rw->chars[start - 1]) == 0) start--;
+    }
+    *r0 = E.cy; *c0 = start; *r1 = E.cy; *c1 = end + 1;
+    return 1;
+}
+
+/* i"/a" (also i' a' i` a`): quote pair on the same line.
+   Scans left-to-right for consecutive pairs; uses the first one that
+   contains or follows the cursor. */
+static int text_obj_quotes(char ia, char q,
+                           int *r0, int *c0, int *r1, int *c1) {
+    if (E.buf.numrows == 0) return 0;
+    Row *rw = &E.buf.rows[E.cy];
+    int cx = E.cx;
+    int left = -1, right = -1;
+    int i = 0;
+    while (i < rw->len) {
+        if (rw->chars[i] != q) { i++; continue; }
+        int j = i + 1;
+        while (j < rw->len && rw->chars[j] != q) j++;
+        if (j >= rw->len) break;          /* unmatched */
+        if (i <= cx && cx <= j) { left = i; right = j; break; }   /* inside */
+        if (i > cx)             { left = i; right = j; break; }   /* to the right */
+        i = j + 1;
+    }
+    if (left == -1 || right == -1) return 0;
+    *r0 = E.cy; *r1 = E.cy;
+    if (ia == 'i') { *c0 = left + 1; *c1 = right; }
+    else           { *c0 = left;     *c1 = right + 1; }
+    return (*c0 < *c1);
+}
+
+/* i(/a( etc.: enclosing bracket pair.  Multi-line aware. */
+static int text_obj_bracket(char ia, char open, char close,
+                            int *r0, int *c0, int *r1, int *c1) {
+    int or_ = -1, oc = -1, cr_ = -1, cc_ = -1;
+
+    /* Search backward for the opening bracket. */
+    {
+        int depth = 0;
+        /* Cursor on the open bracket: use it directly. */
+        if (E.cy < E.buf.numrows && E.cx < E.buf.rows[E.cy].len &&
+                E.buf.rows[E.cy].chars[E.cx] == open) {
+            or_ = E.cy; oc = E.cx;
+        } else {
+            for (int r = E.cy; r >= 0 && or_ == -1; r--) {
+                Row *rw = &E.buf.rows[r];
+                int c_end = (r == E.cy) ? E.cx - 1 : rw->len - 1;
+                for (int k = c_end; k >= 0 && or_ == -1; k--) {
+                    if      (rw->chars[k] == close) depth++;
+                    else if (rw->chars[k] == open) {
+                        if (depth == 0) { or_ = r; oc = k; }
+                        else            depth--;
+                    }
+                }
+            }
+        }
+    }
+    if (or_ == -1) return 0;
+
+    /* Search forward for the matching close bracket. */
+    {
+        int depth = 0;
+        for (int r = or_; r < E.buf.numrows && cr_ == -1; r++) {
+            Row *rw = &E.buf.rows[r];
+            int c_start = (r == or_) ? oc + 1 : 0;
+            for (int k = c_start; k < rw->len && cr_ == -1; k++) {
+                if      (rw->chars[k] == open)  depth++;
+                else if (rw->chars[k] == close) {
+                    if (depth == 0) { cr_ = r; cc_ = k; }
+                    else            depth--;
+                }
+            }
+        }
+    }
+    if (cr_ == -1) return 0;
+
+    if (ia == 'i') { *r0 = or_; *c0 = oc + 1; *r1 = cr_; *c1 = cc_; }
+    else           { *r0 = or_; *c0 = oc;     *r1 = cr_; *c1 = cc_ + 1; }
+    return (*r0 != *r1 || *c0 < *c1);
+}
+
+/* Dispatcher: fills half-open range [r0,c0)..[r1,c1). */
+static int text_object_range(char ia, char obj,
+                             int *r0, int *c0, int *r1, int *c1) {
+    switch (obj) {
+        case 'w':
+            return text_obj_word(ia, r0, c0, r1, c1);
+        case '"': case '\'': case '`':
+            return text_obj_quotes(ia, obj, r0, c0, r1, c1);
+        case '(': case ')': case 'b':
+            return text_obj_bracket(ia, '(', ')', r0, c0, r1, c1);
+        case '[': case ']':
+            return text_obj_bracket(ia, '[', ']', r0, c0, r1, c1);
+        case '{': case '}': case 'B':
+            return text_obj_bracket(ia, '{', '}', r0, c0, r1, c1);
+        case '<': case '>':
+            return text_obj_bracket(ia, '<', '>', r0, c0, r1, c1);
+        default: return 0;
+    }
+}
+
+/* Apply op ('d','y','c') over half-open char range [r0,c0]..[r1,c1).
+   Sets up last_action / insert_motion for dot repeat. */
+static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
+                              char ia, char obj) {
+    if (r0 > r1 || (r0 == r1 && c0 >= c1)) return;
+    if (r1 >= E.buf.numrows) r1 = E.buf.numrows - 1;
+    if (c1 > E.buf.rows[r1].len) c1 = E.buf.rows[r1].len;
+    if (c0 > E.buf.rows[r0].len) c0 = E.buf.rows[r0].len;
+    if (r0 == r1 && c0 >= c1) return;
+
+    if (r0 == r1) {
+        /* Same line. */
+        yank_set_chars(r0, c0, c1);
+        if (op == 'd' || op == 'c') {
+            if (op == 'c') {
+                E.pre_insert_snapshot = editor_capture_state();
+                E.pre_insert_dirty    = E.buf.dirty;
+                E.has_pre_insert      = 1;
+            } else {
+                push_undo();
+            }
+            Row *rw = &E.buf.rows[r0];
+            for (int i = c1 - 1; i >= c0; i--)
+                buf_row_delete_char(rw, i);
+            E.buf.dirty++;
+            buf_mark_hl_dirty(&E.buf, r0);
+            E.cy = r0; E.cx = c0;
+            if (E.cx > rw->len) E.cx = rw->len;
+            if (op == 'c') {
+                E.mode               = MODE_INSERT;
+                E.insert_entry       = 'c';
+                E.insert_motion      = (int)ia;
+                E.insert_find_target = (int)obj;
+                E.insert_count       = 1;
+                insert_rec_reset();
+            }
+        } else {
+            E.cy = r0; E.cx = c0;
+        }
+    } else {
+        /* Multi-line. */
+        yank_set_multiline_chars(r0, c0, r1, c1);
+        if (op == 'd' || op == 'c') {
+            if (op == 'c') {
+                E.pre_insert_snapshot = editor_capture_state();
+                E.pre_insert_dirty    = E.buf.dirty;
+                E.has_pre_insert      = 1;
+            } else {
+                push_undo();
+            }
+            int   tail_len = E.buf.rows[r1].len - c1;
+            char *tail     = malloc(tail_len + 1);
+            memcpy(tail, E.buf.rows[r1].chars + c1, tail_len);
+            tail[tail_len] = '\0';
+            E.buf.rows[r0].len       = c0;
+            E.buf.rows[r0].chars[c0] = '\0';
+            for (int i = 0; i < tail_len; i++)
+                buf_row_insert_char(&E.buf.rows[r0], c0 + i, tail[i]);
+            free(tail);
+            for (int r = r1; r > r0; r--)
+                buf_delete_row(&E.buf, r);
+            E.buf.dirty++;
+            buf_mark_hl_dirty(&E.buf, r0);
+            E.cy = r0; E.cx = c0;
+            if (E.cx > E.buf.rows[r0].len) E.cx = E.buf.rows[r0].len;
+            if (op == 'c') {
+                E.mode               = MODE_INSERT;
+                E.insert_entry       = 'c';
+                E.insert_motion      = (int)ia;
+                E.insert_find_target = (int)obj;
+                E.insert_count       = 1;
+                insert_rec_reset();
+            }
+        } else {
+            E.cy = r0; E.cx = c0;
+        }
+    }
+    if (op == 'd' && !E.is_replaying) {
+        la_free();
+        E.last_action.type        = LA_DELETE;
+        E.last_action.count       = 1;
+        E.last_action.motion      = (int)ia;
+        E.last_action.find_target = obj;
+    }
+    /* 'c' last_action is finalised in the insert-mode Escape handler. */
+}
+
 /* Apply operator op ('d', 'y', or 'c') with the given motion key, repeated n times. */
 static void editor_apply_op(char op, int motion_key, int n) {
     if (E.buf.numrows == 0) return;
+
+    /* Text objects: i<obj> or a<obj>. */
+    if (motion_key == 'i' || motion_key == 'a') {
+        char ia = (char)motion_key;
+        char obj;
+        if (E.is_replaying) {
+            obj = E.last_action.find_target;
+        } else {
+            int nk = editor_read_key();
+            if (nk == '\x1b') return;
+            obj = (char)nk;
+        }
+        int r0, c0, r1, c1;
+        if (!text_object_range(ia, obj, &r0, &c0, &r1, &c1)) return;
+        apply_textobj_op(op, r0, c0, r1, c1, ia, obj);
+        return;
+    }
 
     /* Doubled operator: linewise on n lines starting at cursor (dd/yy/cc/>>/<< + count). */
     if (motion_key == (int)op) {
@@ -905,6 +1128,19 @@ static void editor_process_visual(int c) {
             int r = E.cy, col = E.cx;
             if (pos_find_char(&r, &col, rev, E.last_find_target, 1))
                 E.cx = col;
+            break;
+        }
+        case 'i':
+        case 'a': {
+            int nk = editor_read_key();
+            if (nk == '\x1b') break;
+            int r0, c0, r1, c1;
+            if (!text_object_range((char)c, (char)nk, &r0, &c0, &r1, &c1)) break;
+            if (E.mode == MODE_VISUAL_LINE) E.mode = MODE_VISUAL;
+            E.visual_anchor_row = r0;
+            E.visual_anchor_col = c0;
+            E.cy = r1;
+            E.cx = c1 > 0 ? c1 - 1 : 0;
             break;
         }
         case 'w': editor_move_word_next(); break;
@@ -2004,9 +2240,10 @@ static void editor_process_insert(int c) {
                         la_free();
                         char ent = E.insert_entry;
                         if (ent == 'c') {
-                            E.last_action.type   = LA_CHANGE;
-                            E.last_action.count  = E.insert_count;
-                            E.last_action.motion = E.insert_motion;
+                            E.last_action.type        = LA_CHANGE;
+                            E.last_action.count       = E.insert_count;
+                            E.last_action.motion      = E.insert_motion;
+                            E.last_action.find_target = (char)E.insert_find_target;
                         } else if (ent == 'o' || ent == 'O') {
                             E.last_action.type      = LA_OPEN;
                             E.last_action.open_above = (ent == 'O');

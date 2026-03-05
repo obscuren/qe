@@ -180,6 +180,23 @@ Word motions (`w`, `e`, `b`) cross line boundaries, so `d2w` near the end of a l
 Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
 `c` operations are a single undo step — pressing `u` restores the text before the change.
 
+## Text objects
+
+Text objects work after an operator (`d`, `y`, `c`) or inside Visual mode.
+
+| Object          | `i` (inner)                     | `a` (around)                            |
+|-----------------|---------------------------------|-----------------------------------------|
+| `w`             | word under cursor               | word + surrounding whitespace           |
+| `"` / `'` / `` ` `` | text between matching quotes | including the quote characters     |
+| `(` / `)` / `b` | text inside parentheses        | including the parentheses               |
+| `[` / `]`       | text inside square brackets     | including the brackets                  |
+| `{` / `}` / `B` | text inside curly braces       | including the braces                    |
+| `<` / `>`       | text inside angle brackets      | including the angle brackets            |
+
+Examples: `diw` (delete inner word), `ci"` (change inside quotes), `va(` (visually select including parens), `da{` (delete a block including braces).
+
+Bracket objects are multi-line aware and handle nesting. Dot-repeat works for all text-object delete/change operations.
+
 ## Visual mode (`v` / `V`)
 
 Press `v` for characterwise selection or `V` for linewise selection. The selection extends as you move the cursor using any normal-mode motion key. Press the same key again or `Esc` to cancel.
