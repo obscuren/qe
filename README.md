@@ -163,6 +163,18 @@ Operators combine with a motion to act on a range of text. Type the operator key
 
 All motions also work after operators: `df,` deletes to the next comma, `ct"` changes to the next quote, `y3f.` yanks up to the 3rd period, etc.
 
+### Indent / outdent
+
+| Key   | Action                                             |
+|-------|----------------------------------------------------|
+| `>>`  | Indent current line by one tabwidth                |
+| `<<`  | Outdent current line by one tabwidth               |
+| `3>>` | Indent 3 lines                                     |
+| `>`   | Indent selection (Visual / Visual Line mode)       |
+| `<`   | Outdent selection (Visual / Visual Line mode)      |
+
+`.` repeats the last indent/outdent with the same count (overridable with a new count prefix).
+
 Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
 `c` operations are a single undo step — pressing `u` restores the text before the change.
 

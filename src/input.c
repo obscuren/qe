@@ -383,15 +383,53 @@ static void push_undo(void) {
     undo_stack_clear(&E.redo_stack);
 }
 
+/* Indent (dir='>') or outdent (dir='<') lines r0..r1 by one tabwidth. */
+static void indent_lines(int r0, int r1, char dir) {
+    int tw = E.opts.tabwidth;
+    if (r1 >= E.buf.numrows) r1 = E.buf.numrows - 1;
+    for (int r = r0; r <= r1; r++) {
+        Row *row = &E.buf.rows[r];
+        if (dir == '>') {
+            for (int i = 0; i < tw; i++)
+                buf_row_insert_char(row, 0, ' ');
+            E.buf.dirty++;
+        } else {
+            int remove = 0;
+            while (remove < tw && remove < row->len && row->chars[remove] == ' ')
+                remove++;
+            if (remove > 0) {
+                for (int i = 0; i < remove; i++)
+                    buf_row_delete_char(row, 0);
+                E.buf.dirty++;
+            }
+        }
+        buf_mark_hl_dirty(&E.buf, r);
+    }
+}
+
 /* Apply operator op ('d', 'y', or 'c') with the given motion key, repeated n times. */
 static void editor_apply_op(char op, int motion_key, int n) {
     if (E.buf.numrows == 0) return;
 
-    /* Doubled operator: linewise on n lines starting at cursor (dd/yy/cc + count). */
+    /* Doubled operator: linewise on n lines starting at cursor (dd/yy/cc/>>/<< + count). */
     if (motion_key == (int)op) {
         int r0 = E.cy;
         int r1 = E.cy + n - 1;
         if (r1 >= E.buf.numrows) r1 = E.buf.numrows - 1;
+
+        if (op == '>' || op == '<') {
+            push_undo();
+            indent_lines(r0, r1, (char)op);
+            E.cx = 0;
+            if (!E.is_replaying) {
+                la_free();
+                E.last_action.type   = LA_INDENT;
+                E.last_action.count  = n;
+                E.last_action.motion = op;
+            }
+            return;
+        }
+
         yank_set_lines(r0, r1);
         if (op == 'd') {
             push_undo();
@@ -680,6 +718,24 @@ static void editor_process_visual(int c) {
         case 'c':
             visual_op_change();
             break;
+
+        case '>':
+        case '<': {
+            int ar = E.visual_anchor_row, cr = E.cy;
+            int r0 = ar < cr ? ar : cr;
+            int r1 = ar > cr ? ar : cr;
+            push_undo();
+            indent_lines(r0, r1, (char)c);
+            E.cx = 0;
+            E.mode = MODE_NORMAL;
+            if (!E.is_replaying) {
+                la_free();
+                E.last_action.type   = LA_INDENT;
+                E.last_action.count  = r1 - r0 + 1;
+                E.last_action.motion = c;
+            }
+            break;
+        }
 
         /* Cursor movement — same keys as normal mode. */
         case 'f': case 'F': case 't': case 'T': {
@@ -1379,7 +1435,7 @@ static void editor_process_normal(int c) {
     }
 
     /* Operators: set pending_op WITHOUT consuming count (e.g. 3dd needs it). */
-    if (c == 'd' || c == 'y' || c == 'c') {
+    if (c == 'd' || c == 'y' || c == 'c' || c == '>' || c == '<') {
         E.pending_op = (char)c;
         return;
     }
@@ -1572,6 +1628,11 @@ static void editor_process_normal(int c) {
                     if (E.cx > 0 && E.cx >= row->len) E.cx--;
                     break;
                 }
+                case LA_INDENT:
+                    push_undo();
+                    indent_lines(E.cy, E.cy + use_n - 1, (char)E.last_action.motion);
+                    E.cx = 0;
+                    break;
                 case LA_DELETE:
                     editor_apply_op('d', E.last_action.motion, use_n);
                     break;
