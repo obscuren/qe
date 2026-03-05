@@ -175,6 +175,8 @@ All motions also work after operators: `df,` deletes to the next comma, `ct"` ch
 
 `.` repeats the last indent/outdent with the same count (overridable with a new count prefix).
 
+Word motions (`w`, `e`, `b`) cross line boundaries, so `d2w` near the end of a line deletes through the newline into the next line. Yanked multi-line text can be pasted back with `p`.
+
 Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
 `c` operations are a single undo step — pressing `u` restores the text before the change.
 

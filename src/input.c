@@ -331,6 +331,25 @@ static void yank_set_chars(int row, int c0, int c1) {
     E.yank_rows[0][len] = '\0';
 }
 
+/* Charwise yank spanning multiple rows: row sr cols [sc..end),
+   full rows sr+1..er-1, row er cols [0..ec). */
+static void yank_set_multiline_chars(int sr, int sc, int er, int ec) {
+    yank_free();
+    E.yank_linewise = 0;
+    E.yank_numrows  = er - sr + 1;
+    E.yank_rows     = malloc(sizeof(char *) * E.yank_numrows);
+    for (int i = 0; i < E.yank_numrows; i++) {
+        int r   = sr + i;
+        int len = E.buf.rows[r].len;
+        int c0  = (i == 0)                  ? sc : 0;
+        int c1  = (i == E.yank_numrows - 1) ? (ec < len ? ec : len) : len;
+        int seg = c1 - c0; if (seg < 0) seg = 0;
+        E.yank_rows[i] = malloc(seg + 1);
+        if (seg > 0) memcpy(E.yank_rows[i], E.buf.rows[r].chars + c0, seg);
+        E.yank_rows[i][seg] = '\0';
+    }
+}
+
 static void editor_close_bracket(char c);  /* forward declaration */
 
 /* ── . repeat helpers ────────────────────────────────────────────────── */
@@ -518,16 +537,75 @@ static void editor_apply_op(char op, int motion_key, int n) {
                 default:  return;
             }
         }
-        /* For 'e': convert inclusive end to exclusive. */
-        if (motion_key == 'e' && tr == E.cy) tc++;
+        /* For 'e': convert inclusive end to exclusive (works for any row). */
+        if (motion_key == 'e') {
+            int rlen = (tr < E.buf.numrows) ? E.buf.rows[tr].len : 0;
+            if (tc < rlen) tc++;
+        }
     }
 
-    /* Clamp cross-line motions to the current line boundary. */
+    /* ── Cross-line charwise operation ─────────────────────────────────── */
     if (tr != E.cy) {
-        tc = (tr > E.cy) ? E.buf.rows[E.cy].len : 0;
-        tr = E.cy;
+        /* Ordered start/end. */
+        int sr, sc, er, ec;
+        if (tr > E.cy || (tr == E.cy && tc >= E.cx))
+            { sr = E.cy; sc = E.cx; er = tr;   ec = tc;   }
+        else
+            { sr = tr;   sc = tc;   er = E.cy; ec = E.cx; }
+        if (er >= E.buf.numrows) er = E.buf.numrows - 1;
+        if (ec > E.buf.rows[er].len) ec = E.buf.rows[er].len;
+
+        yank_set_multiline_chars(sr, sc, er, ec);
+
+        if (op == 'd' || op == 'c') {
+            if (op == 'c') {
+                E.pre_insert_snapshot = editor_capture_state();
+                E.pre_insert_dirty    = E.buf.dirty;
+                E.has_pre_insert      = 1;
+            } else {
+                push_undo();
+            }
+            /* Save tail of end row, then merge: row sr[0..sc) + row er[ec..end). */
+            int   tail_len = E.buf.rows[er].len - ec;
+            char *tail     = malloc(tail_len + 1);
+            memcpy(tail, E.buf.rows[er].chars + ec, tail_len);
+            tail[tail_len] = '\0';
+
+            /* Truncate start row at sc. */
+            E.buf.rows[sr].len      = sc;
+            E.buf.rows[sr].chars[sc] = '\0';
+            /* Append tail to start row. */
+            for (int i = 0; i < tail_len; i++)
+                buf_row_insert_char(&E.buf.rows[sr], sc + i, tail[i]);
+            free(tail);
+
+            /* Delete rows er down to sr+1. */
+            for (int r = er; r > sr; r--)
+                buf_delete_row(&E.buf, r);
+
+            E.buf.dirty++;
+            buf_mark_hl_dirty(&E.buf, sr);
+            E.cy = sr;
+            E.cx = sc;
+            if (E.cx > E.buf.rows[sr].len) E.cx = E.buf.rows[sr].len;
+
+            if (op == 'd' && !E.is_replaying) {
+                la_free();
+                E.last_action.type   = LA_DELETE;
+                E.last_action.count  = n;
+                E.last_action.motion = motion_key;
+            } else if (op == 'c') {
+                E.mode          = MODE_INSERT;
+                E.insert_entry  = 'c';
+                E.insert_motion = motion_key;
+                E.insert_count  = n;
+                insert_rec_reset();
+            }
+        }
+        return;
     }
 
+    /* ── Same-line charwise operation ───────────────────────────────────── */
     /* Build ordered range [c0, c1) on the current row. */
     int c0   = (tc < E.cx) ? tc : E.cx;
     int c1   = (tc < E.cx) ? E.cx : tc;
@@ -583,17 +661,60 @@ static void editor_paste(int before) {
     } else {
         if (E.buf.numrows == 0)
             buf_insert_row(&E.buf, 0, "", 0);
-        Row        *row  = &E.buf.rows[E.cy];
-        int         ins  = before ? E.cx
-                                  : (E.cx < row->len ? E.cx + 1 : row->len);
-        const char *text = E.yank_rows[0];
-        int         tlen = (int)strlen(text);
-        for (int i = tlen - 1; i >= 0; i--)
-            buf_row_insert_char(row, ins, text[i]);
-        E.buf.dirty++;
-        buf_mark_hl_dirty(&E.buf, E.cy);
-        E.cx = ins + tlen - 1;
-        if (E.cx < 0) E.cx = 0;
+        Row *row = &E.buf.rows[E.cy];
+        int  ins = before ? E.cx : (E.cx < row->len ? E.cx + 1 : row->len);
+
+        if (E.yank_numrows == 1) {
+            /* Single-row charwise paste. */
+            const char *text = E.yank_rows[0];
+            int         tlen = (int)strlen(text);
+            for (int i = tlen - 1; i >= 0; i--)
+                buf_row_insert_char(row, ins, text[i]);
+            E.buf.dirty++;
+            buf_mark_hl_dirty(&E.buf, E.cy);
+            E.cx = ins + tlen - 1;
+            if (E.cx < 0) E.cx = 0;
+        } else {
+            /* Multi-row charwise paste.
+               Splits current row at `ins`:
+                 row[0..ins) + yank_rows[0]     → stays on current row
+                 yank_rows[1..n-2]              → new rows
+                 yank_rows[n-1] + row[ins..end) → final new row       */
+            int   tail_len = row->len - ins;
+            char *tail     = malloc(tail_len + 1);
+            memcpy(tail, row->chars + ins, tail_len);
+            tail[tail_len] = '\0';
+
+            /* Truncate current row at ins, then append first yank row. */
+            row->len      = ins;
+            row->chars[ins] = '\0';
+            const char *first = E.yank_rows[0];
+            int          flen = (int)strlen(first);
+            for (int i = flen - 1; i >= 0; i--)
+                buf_row_insert_char(&E.buf.rows[E.cy], ins, first[i]);
+
+            /* Insert intermediate yank rows. */
+            for (int i = 1; i < E.yank_numrows - 1; i++)
+                buf_insert_row(&E.buf, E.cy + i,
+                               E.yank_rows[i], (int)strlen(E.yank_rows[i]));
+
+            /* Last yank row + original tail become a new row. */
+            const char *last = E.yank_rows[E.yank_numrows - 1];
+            int          llen = (int)strlen(last);
+            int       new_row = E.cy + E.yank_numrows - 1;
+            char    *combined = malloc(llen + tail_len + 1);
+            memcpy(combined,        last, llen);
+            memcpy(combined + llen, tail, tail_len);
+            combined[llen + tail_len] = '\0';
+            buf_insert_row(&E.buf, new_row, combined, llen + tail_len);
+            free(combined);
+            free(tail);
+
+            E.buf.dirty++;
+            buf_mark_hl_dirty(&E.buf, E.cy);
+            E.cy = new_row;
+            E.cx = llen > 0 ? llen - 1 : 0;
+        }
     }
 }
 
