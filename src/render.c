@@ -33,14 +33,16 @@ static void ab_free(AppendBuf *ab) {
 
 /* ── Gutter ──────────────────────────────────────────────────────────── */
 
-/* Width of the line-number gutter: digits in numrows + 1 trailing space.
-   Returns 0 when line numbers are off or the buffer is empty. */
-static int gutter_width(void) {
-    if (!E.opts.line_numbers || E.buf.numrows == 0) return 0;
-    int n = E.buf.numrows, w = 0;
+/* Width of the line-number gutter for a specific buffer. */
+static int gutter_width_for(const Buffer *buf) {
+    if (!E.opts.line_numbers || buf->numrows == 0) return 0;
+    int n = buf->numrows, w = 0;
     while (n > 0) { w++; n /= 10; }
-    return w + 1;  /* e.g. 3-digit file → "999 " = width 4 */
+    return w + 1;
 }
+
+/* Gutter width for the active (live) buffer. */
+static int gutter_width(void) { return gutter_width_for(&E.buf); }
 
 /* ── Scroll ──────────────────────────────────────────────────────────── */
 
@@ -69,28 +71,6 @@ static const char *SPLASH[] = {
 };
 #define SPLASH_LINES ((int)(sizeof(SPLASH) / sizeof(SPLASH[0])))
 
-/* Draw one splash line: '~' always appears at column 0, text is centred
-   in the remaining width by letting '~' absorb the first padding space. */
-static void draw_splash_line(AppendBuf *ab, int y) {
-    int top = (E.screenrows - SPLASH_LINES) / 2;
-    int idx = y - top;
-
-    ab_append(ab, "~", 1);
-
-    if (idx < 0 || idx >= SPLASH_LINES)
-        return;
-
-    int len = (int)strlen(SPLASH[idx]);
-    if (len > E.screencols) len = E.screencols;
-
-    /* '~' already occupies the first column, so subtract 1 from width. */
-    int pad = (E.screencols - 1 - len) / 2;
-    while (pad-- > 0)
-        ab_append(ab, " ", 1);
-
-    ab_append(ab, SPLASH[idx], len);
-}
-
 /* Map a HlType to its ANSI escape code, or NULL for HL_NORMAL. */
 static const char *hl_to_escape(unsigned char hl) {
     switch ((HlType)hl) {
@@ -107,23 +87,24 @@ static const char *hl_to_escape(unsigned char hl) {
 }
 
 /* For a given file row, compute the visual-selection column range [*c0, *c1).
-   Returns 1 if the row is (at least partially) selected, 0 otherwise.
-   *c1 == INT_MAX means "to end of row" and must be resolved by the caller. */
-static int visual_col_range(int filerow, int *c0, int *c1) {
-    if (E.mode != MODE_VISUAL && E.mode != MODE_VISUAL_LINE) return 0;
+   vis_anchor_row/col and cur_row/col are the selection bounds (from active pane).
+   Returns 1 if the row is (at least partially) selected, 0 otherwise. */
+static int visual_col_range_for(int filerow, int vis_anchor_row, int vis_anchor_col,
+                                 int cur_row, int cur_col,
+                                 EditorMode mode, int *c0, int *c1) {
+    if (mode != MODE_VISUAL && mode != MODE_VISUAL_LINE) return 0;
 
-    int ar = E.visual_anchor_row, ac = E.visual_anchor_col;
-    int cr = E.cy,               cc = E.cx;
+    int ar = vis_anchor_row, ac = vis_anchor_col;
+    int cr = cur_row,        cc = cur_col;
     int r0 = ar < cr ? ar : cr;
     int r1 = ar > cr ? ar : cr;
     if (filerow < r0 || filerow > r1) return 0;
 
-    if (E.mode == MODE_VISUAL_LINE) {
+    if (mode == MODE_VISUAL_LINE) {
         *c0 = 0; *c1 = INT_MAX;
         return 1;
     }
 
-    /* Charwise: determine the ordered start/end positions. */
     int sr, sc, er, ec;
     if (ar < cr || (ar == cr && ac <= cc)) {
         sr = ar; sc = ac; er = cr; ec = cc;
@@ -138,23 +119,19 @@ static int visual_col_range(int filerow, int *c0, int *c1) {
     return 1;
 }
 
-/* Priority (lowest → highest): syntax, bracket match, visual, search.
-   bm0/bm1: bracket-match file-column positions on this row (-1 = none).
-   vis_c0/vis_c1: visual selection file-column range (-1 = none on this row). */
+/* Priority (lowest → highest): syntax, bracket match, visual, search. */
 static void render_row_content(AppendBuf *ab, const Row *row,
                                int coloff, int visible_len,
                                const SearchQuery *q, int bm0, int bm1,
                                int vis_c0, int vis_c1) {
     if (visible_len <= 0) return;
 
-    /* Build a per-character final highlight array for the visible slice. */
     unsigned char final_hl[visible_len];
     if (row->hl)
         memcpy(final_hl, &row->hl[coloff], visible_len);
     else
         memset(final_hl, HL_NORMAL, visible_len);
 
-    /* Overlay bracket match positions. */
     int bm[2] = {bm0, bm1};
     for (int i = 0; i < 2; i++) {
         int col = bm[i] - coloff;
@@ -162,7 +139,6 @@ static void render_row_content(AppendBuf *ab, const Row *row,
             final_hl[col] = HL_BRACKET_MATCH;
     }
 
-    /* Overlay visual selection (overrides bracket match). */
     if (vis_c0 >= 0) {
         int vc0 = vis_c0 - coloff;
         int vc1 = (vis_c1 == INT_MAX) ? visible_len : vis_c1 - coloff;
@@ -172,7 +148,6 @@ static void render_row_content(AppendBuf *ab, const Row *row,
             final_hl[i] = HL_VISUAL;
     }
 
-    /* Overlay search matches (highest priority). */
     if (q) {
         int col_end = coloff + visible_len;
         int pos     = coloff;
@@ -191,37 +166,30 @@ static void render_row_content(AppendBuf *ab, const Row *row,
         }
     }
 
-    /* Render in same-color runs. */
     unsigned char prev  = HL_NORMAL;
     int           any   = 0;
     int           i     = 0;
 
     while (i < visible_len) {
         unsigned char cur = final_hl[i];
-
-        /* Find end of this run. */
         int j = i + 1;
         while (j < visible_len && final_hl[j] == cur) j++;
-
-        /* Emit color change when needed. */
         if (cur != prev) {
-            ab_append(ab, "\x1b[m", 3);            /* reset first */
+            ab_append(ab, "\x1b[m", 3);
             const char *esc = hl_to_escape(cur);
             if (esc) ab_append(ab, esc, (int)strlen(esc));
             prev = cur;
             any  = 1;
         }
-
         ab_append(ab, &row->chars[coloff + i], j - i);
         i = j;
     }
 
-    if (any) ab_append(ab, "\x1b[m", 3);  /* final reset */
+    if (any) ab_append(ab, "\x1b[m", 3);
 }
 
 /* Find the bracket that matches the one under the cursor (if any).
-   Result is stored in E.match_bracket_{valid,row,col}.
-   Only active in Normal mode; no syntax awareness (string/comment skipping). */
+   Result is stored in E.match_bracket_{valid,row,col}. */
 static void editor_find_bracket_match(void) {
     E.match_bracket_valid = 0;
     if (E.mode != MODE_NORMAL || E.buf.numrows == 0 || E.cy >= E.buf.numrows)
@@ -279,151 +247,209 @@ found:
     E.match_bracket_col   = c;
 }
 
-static void editor_draw_rows(AppendBuf *ab) {
-    int gw           = gutter_width();
-    int content_cols = E.screencols - gw;
+/* ── Per-pane drawing ────────────────────────────────────────────────── */
 
-    editor_find_bracket_match();
+static void draw_pane_rows(AppendBuf *ab, const Pane *p,
+                           int pcx, int pcy, int pro, int pco,
+                           Buffer *buf, const SyntaxDef *syn,
+                           EditorMode mode,
+                           const SearchQuery *hl_q,
+                           int vis_ar, int vis_ac,
+                           int bm_valid, int bm_row, int bm_col) {
+    int gw           = gutter_width_for(buf);
+    int content_cols = p->width - gw;
 
-    /* Cascade hl_open_comment for any rows dirtied since last draw. */
-    if (E.syntax && E.buf.hl_dirty_from < E.buf.numrows) {
-        syntax_update_open_comments(E.syntax, &E.buf, E.buf.hl_dirty_from);
-        E.buf.hl_dirty_from = E.buf.numrows;  /* mark clean */
+    /* Cascade hl_open_comment for dirty rows. */
+    if (syn && buf->hl_dirty_from < buf->numrows) {
+        syntax_update_open_comments(syn, buf, buf->hl_dirty_from);
+        buf->hl_dirty_from = buf->numrows;
     }
 
-    /* Active search query for match highlighting (NULL = no highlight). */
-    SearchQuery        live_q;
-    const SearchQuery *hl_query = NULL;
-    if (E.mode == MODE_SEARCH && E.searchlen > 0) {
-        search_query_init_literal(&live_q, E.searchbuf, E.searchlen);
-        hl_query = &live_q;
-    } else if (E.last_search_valid) {
-        hl_query = &E.last_query;
-    }
+    char mv[24];
+    for (int y = 0; y < p->height; y++) {
+        int filerow = y + pro;
 
-    for (int y = 0; y < E.screenrows; y++) {
-        int filerow = y + E.rowoff;
+        /* Move to absolute terminal position. */
+        int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;%dH", p->top + y, p->left);
+        ab_append(ab, mv, mvlen);
 
-        if (E.buf.numrows == 0) {
-            /* Empty buffer: splash screen, no gutter. */
-            draw_splash_line(ab, y);
+        /* Erase this pane row (only within pane width). */
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
 
-        } else if (filerow >= E.buf.numrows) {
-            /* Past end of file: '~' at column 0, no gutter (Vim style). */
+        if (buf->numrows == 0) {
+            /* Empty buffer: splash only for single-pane active. */
+            if (p->width > 1) {
+                if (E.num_panes == 1) {
+                    int top = (p->height - SPLASH_LINES) / 2;
+                    int idx = y - top;
+                    ab_append(ab, "~", 1);
+                    if (idx >= 0 && idx < SPLASH_LINES) {
+                        int len = (int)strlen(SPLASH[idx]);
+                        if (len > p->width) len = p->width;
+                        int pad = (p->width - 1 - len) / 2;
+                        while (pad-- > 0) ab_append(ab, " ", 1);
+                        ab_append(ab, SPLASH[idx], len);
+                    }
+                } else {
+                    ab_append(ab, "~", 1);
+                }
+            }
+        } else if (filerow >= buf->numrows) {
             ab_append(ab, "~", 1);
-
         } else {
-            /* Content row: gutter then text. */
+            /* Gutter */
             if (gw > 0) {
-                /* Right-align the line number, then a trailing space. */
                 char num[16];
                 int  nlen = snprintf(num, sizeof(num), "%d", filerow + 1);
                 int  pad  = gw - 1 - nlen;
-                ab_append(ab, (filerow == E.cy) ? "\x1b[1m" : "\x1b[2m", 4);
+                ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
                 while (pad-- > 0) ab_append(ab, " ", 1);
                 ab_append(ab, num, nlen);
                 ab_append(ab, " ", 1);
                 ab_append(ab, "\x1b[m", 3);
             }
 
-            Row *row = &E.buf.rows[filerow];
-            int  len = row->len - E.coloff;
+            Row *row = &buf->rows[filerow];
+            int  len = row->len - pco;
             if (len < 0) len = 0;
             if (len > content_cols) len = content_cols;
 
-            if (E.syntax)
-                syntax_highlight_row(E.syntax, row, row->hl_open_comment);
+            if (syn)
+                syntax_highlight_row(syn, row, row->hl_open_comment);
 
-            /* Bracket match columns for this row (-1 = not on this row). */
             int bm0 = -1, bm1 = -1;
-            if (E.match_bracket_valid) {
-                if (filerow == E.cy)
-                    bm0 = E.cx;
-                if (filerow == E.match_bracket_row)
-                    bm1 = E.match_bracket_col;
+            if (bm_valid) {
+                if (filerow == pcy)    bm0 = pcx;
+                if (filerow == bm_row) bm1 = bm_col;
             }
 
-            /* Visual selection range for this row (-1 = not selected). */
             int vis_c0 = -1, vis_c1 = -1;
-            {
+            if (vis_ar >= 0) {
                 int vc0, vc1;
-                if (visual_col_range(filerow, &vc0, &vc1)) {
+                if (visual_col_range_for(filerow, vis_ar, vis_ac, pcy, pcx,
+                                         mode, &vc0, &vc1)) {
                     vis_c0 = vc0;
                     vis_c1 = (vc1 == INT_MAX) ? row->len : vc1;
                 }
             }
 
             if (len > 0) {
-                if (hl_query || row->hl || bm0 != -1 || bm1 != -1 || vis_c0 != -1)
-                    render_row_content(ab, row, E.coloff, len, hl_query,
+                if (hl_q || row->hl || bm0 != -1 || bm1 != -1 || vis_c0 != -1)
+                    render_row_content(ab, row, pco, len, hl_q,
                                        bm0, bm1, vis_c0, vis_c1);
                 else
-                    ab_append(ab, &row->chars[E.coloff], len);
+                    ab_append(ab, &row->chars[pco], len);
             }
         }
-
-        ab_append(ab, "\x1b[K", 3);  /* erase to end of line */
-        ab_append(ab, "\r\n", 2);
     }
 }
 
-static void editor_draw_status_bar(AppendBuf *ab) {
-    /* Show tab-completion list instead of normal status bar when active */
-    if (E.completion_idx >= 0 && E.mode == MODE_COMMAND) {
-        ab_append(ab, "\x1b[107;30m", 9);  /* bright white bg, black text */
-        ab_append(ab, "\x1b[K", 3);        /* erase rest of line with that bg */
+static void draw_pane_status(AppendBuf *ab, const Pane *p,
+                             const Buffer *buf, int pcx, int pcy,
+                             int is_active) {
+    /* Position at status bar row for this pane. */
+    char mv[24];
+    int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;%dH", p->top + p->height, p->left);
+    ab_append(ab, mv, mvlen);
+
+    /* Tab-completion overlay for active pane in command mode. */
+    if (is_active && E.completion_idx >= 0 && E.mode == MODE_COMMAND) {
+        ab_append(ab, "\x1b[107;30m", 9);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
         int col = 0;
         for (int i = 0; i < E.completion_count; i++) {
             int len = (int)strlen(E.completion_matches[i]);
-            if (col + len + 1 > E.screencols) break;
+            if (col + len + 1 > p->width) break;
             if (i == E.completion_idx)
-                ab_append(ab, "\x1b[40;97m", 8);   /* black bg, bright white text */
+                ab_append(ab, "\x1b[40;97m", 8);
             ab_append(ab, E.completion_matches[i], len);
             if (i == E.completion_idx)
-                ab_append(ab, "\x1b[107;30m", 9);  /* back to bright white bg, black text */
+                ab_append(ab, "\x1b[107;30m", 9);
             ab_append(ab, " ", 1);
             col += len + 1;
         }
         ab_append(ab, "\x1b[m", 3);
-        ab_append(ab, "\r\n", 2);
         return;
     }
 
-    ab_append(ab, "\x1b[7m", 4);  /* reverse video on */
+    /* Active = full reverse video; inactive = dim reverse. */
+    ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+
+    /* Erase pane width with current attributes. */
+    char erase[16];
+    int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+    ab_append(ab, erase, elen);
 
     char left[128], right[32];
-    const char *name = E.buf.filename ? E.buf.filename : "[No Name]";
-    char bufnum[32] = "";
-    if (E.num_buftabs > 1)
-        snprintf(bufnum, sizeof(bufnum), " [%d/%d]", E.cur_buftab + 1, E.num_buftabs);
-    int llen = snprintf(left, sizeof(left), " %.30s%s%s",
-                        name, E.buf.dirty ? " [+]" : "", bufnum);
-    char prefix[16] = "";
-    if (E.count > 0 && E.pending_op)
-        snprintf(prefix, sizeof(prefix), "%d%c", E.count, E.pending_op);
-    else if (E.count > 0)
-        snprintf(prefix, sizeof(prefix), "%d", E.count);
-    else if (E.pending_op)
-        snprintf(prefix, sizeof(prefix), "%c", E.pending_op);
-    int rlen = prefix[0]
-        ? snprintf(right, sizeof(right), "%s    %d,%d ", prefix, E.cy + 1, E.cx + 1)
-        : snprintf(right, sizeof(right), "%d,%d ", E.cy + 1, E.cx + 1);
+    const char *name = buf->filename ? buf->filename : "[No Name]";
 
-    if (llen > E.screencols) llen = E.screencols;
+    int llen, rlen;
+    if (is_active) {
+        char bufnum[32] = "";
+        if (E.num_buftabs > 1)
+            snprintf(bufnum, sizeof(bufnum), " [%d/%d]",
+                     E.cur_buftab + 1, E.num_buftabs);
+        llen = snprintf(left, sizeof(left), " %.30s%s%s",
+                        name, buf->dirty ? " [+]" : "", bufnum);
+        char prefix[16] = "";
+        if (E.count > 0 && E.pending_op)
+            snprintf(prefix, sizeof(prefix), "%d%c", E.count, E.pending_op);
+        else if (E.count > 0)
+            snprintf(prefix, sizeof(prefix), "%d", E.count);
+        else if (E.pending_op)
+            snprintf(prefix, sizeof(prefix), "%c", E.pending_op);
+        rlen = prefix[0]
+            ? snprintf(right, sizeof(right), "%s    %d,%d ", prefix, pcy + 1, pcx + 1)
+            : snprintf(right, sizeof(right), "%d,%d ", pcy + 1, pcx + 1);
+    } else {
+        llen = snprintf(left,  sizeof(left),  " %.30s%s", name, buf->dirty ? " [+]" : "");
+        rlen = snprintf(right, sizeof(right), "%d,%d ", pcy + 1, pcx + 1);
+    }
+
+    if (llen > p->width) llen = p->width;
     ab_append(ab, left, llen);
 
-    int gap = E.screencols - llen - rlen;
-    while (gap-- > 0)
-        ab_append(ab, " ", 1);
+    int gap = p->width - llen - rlen;
+    while (gap-- > 0) ab_append(ab, " ", 1);
+    if (llen + rlen <= p->width) ab_append(ab, right, rlen);
 
-    if (llen + rlen <= E.screencols)
-        ab_append(ab, right, rlen);
-
-    ab_append(ab, "\x1b[m", 3);   /* reverse video off */
-    ab_append(ab, "\r\n", 2);
+    ab_append(ab, "\x1b[m", 3);
 }
 
-static void editor_draw_command_bar(AppendBuf *ab) {
+/* Draw a 1-column white-background divider between side-by-side panes.
+   A divider exists at column (p->left + p->width) when another pane
+   starts immediately one column to the right. */
+static void draw_dividers(AppendBuf *ab) {
+    for (int i = 0; i < E.num_panes; i++) {
+        Pane *p = &E.panes[i];
+        int div_col = p->left + p->width;   /* 1-based divider column */
+        if (div_col > E.term_cols) continue;
+        /* Check if a right-neighbour pane starts right after the gap. */
+        int has_right = 0;
+        for (int j = 0; j < E.num_panes && !has_right; j++) {
+            if (j != i && E.panes[j].left == div_col + 1) has_right = 1;
+        }
+        if (!has_right) continue;
+        /* Draw a white-background space for each content row only (status bar
+           is covered by the combined group status bar drawn separately). */
+        char mv[24];
+        for (int row = p->top; row < p->top + p->height; row++) {
+            int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;%dH", row, div_col);
+            ab_append(ab, mv, mvlen);
+            ab_append(ab, "\x1b[107m \x1b[m", 10);
+        }
+    }
+}
+
+static void draw_global_command_bar(AppendBuf *ab) {
+    char mv[24];
+    int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;1H", E.term_rows);
+    ab_append(ab, mv, mvlen);
+
     ab_append(ab, "\x1b[K", 3);  /* erase line */
 
     switch (E.mode) {
@@ -442,7 +468,7 @@ static void editor_draw_command_bar(AppendBuf *ab) {
         case MODE_COMMAND: {
             char line[258];
             int len = snprintf(line, sizeof(line), ":%s", E.cmdbuf);
-            if (len > E.screencols) len = E.screencols;
+            if (len > E.term_cols) len = E.term_cols;
             ab_append(ab, line, len);
             break;
         }
@@ -450,7 +476,7 @@ static void editor_draw_command_bar(AppendBuf *ab) {
         case MODE_SEARCH: {
             char line[258];
             int len = snprintf(line, sizeof(line), "/%s", E.searchbuf);
-            if (len > E.screencols) len = E.screencols;
+            if (len > E.term_cols) len = E.term_cols;
             ab_append(ab, line, len);
             break;
         }
@@ -458,9 +484,9 @@ static void editor_draw_command_bar(AppendBuf *ab) {
         case MODE_NORMAL:
             if (E.statusmsg[0]) {
                 int len = (int)strlen(E.statusmsg);
-                if (len > E.screencols) len = E.screencols;
+                if (len > E.term_cols) len = E.term_cols;
                 if (E.statusmsg_is_error)
-                    ab_append(ab, "\x1b[41;97m", 8);   /* red bg + white fg */
+                    ab_append(ab, "\x1b[41;97m", 8);
                 ab_append(ab, E.statusmsg, len);
                 if (E.statusmsg_is_error)
                     ab_append(ab, "\x1b[m", 3);
@@ -476,35 +502,108 @@ void editor_refresh_screen(void) {
 
     AppendBuf ab = ABUF_INIT;
 
-    ab_append(&ab, "\x1b[?25l", 6);  /* hide cursor while drawing */
-    ab_append(&ab, "\x1b[H",    3);  /* move to top-left */
+    ab_append(&ab, "\x1b[?25l", 6);  /* hide cursor */
+    ab_append(&ab, "\x1b[m",    3);  /* reset attributes before clear */
+    ab_append(&ab, "\x1b[2J",   4);  /* clear entire screen */
 
-    editor_draw_rows(&ab);
-    editor_draw_status_bar(&ab);
-    editor_draw_command_bar(&ab);
+    /* Draw inactive panes first, then active on top (for shared buffers). */
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < E.num_panes; i++) {
+            int active = (i == E.cur_pane);
+            if ((pass == 0) == active) continue;
 
-    /* Set cursor shape: block in normal, bar in insert/command/search. */
-    if (E.mode == MODE_NORMAL)
-        ab_append(&ab, "\x1b[1 q", 5);  /* blinking block */
-    else
-        ab_append(&ab, "\x1b[6 q", 5);  /* steady bar */
+            Pane   *p    = &E.panes[i];
+            Buffer *pbuf = (p->buf_idx == E.cur_buftab) ? &E.buf
+                                                        : &E.buftabs[p->buf_idx].buf;
+            const SyntaxDef *psyn = active ? E.syntax
+                                           : E.buftabs[p->buf_idx].syntax;
+            int pcx = active ? E.cx      : p->cx;
+            int pcy = active ? E.cy      : p->cy;
+            int pro = active ? E.rowoff  : p->rowoff;
+            int pco = active ? E.coloff  : p->coloff;
 
-    /* Reposition cursor. */
+            /* Bracket match: only recompute for active pane. */
+            if (active) editor_find_bracket_match();
+
+            /* Search highlight query. */
+            SearchQuery        live_q;
+            const SearchQuery *hl_q = NULL;
+            if (active) {
+                if (E.mode == MODE_SEARCH && E.searchlen > 0) {
+                    search_query_init_literal(&live_q, E.searchbuf, E.searchlen);
+                    hl_q = &live_q;
+                } else if (E.last_search_valid) {
+                    hl_q = &E.last_query;
+                }
+            }
+
+            draw_pane_rows(&ab, p, pcx, pcy, pro, pco, pbuf, psyn, E.mode, hl_q,
+                           active ? E.visual_anchor_row : -1,
+                           active ? E.visual_anchor_col : -1,
+                           active && E.match_bracket_valid,
+                           E.match_bracket_row, E.match_bracket_col);
+        }
+    }
+
+    /* Draw one combined status bar per group of panes sharing a status row.
+       Side-by-side panes from :vsplit share the same (top + height) row, so
+       they get one unified status bar spanning the full group width. */
+    {
+        int processed[MAX_PANES] = {0};
+        for (int i = 0; i < E.num_panes; i++) {
+            if (processed[i]) continue;
+            Pane *p         = &E.panes[i];
+            int  status_row = p->top + p->height;
+            int  group_left  = p->left;
+            int  group_right = p->left + p->width;
+            int  active_in_group = -1;
+            for (int j = 0; j < E.num_panes; j++) {
+                Pane *q = &E.panes[j];
+                if (q->top + q->height != status_row) continue;
+                processed[j] = 1;
+                if (q->left < group_left)             group_left  = q->left;
+                if (q->left + q->width > group_right) group_right = q->left + q->width;
+                if (j == E.cur_pane) active_in_group = j;
+            }
+            int is_active = (active_in_group >= 0);
+            const Buffer *dbuf;
+            int dcx, dcy;
+            if (is_active) {
+                dbuf = &E.buf; dcx = E.cx; dcy = E.cy;
+            } else {
+                dbuf = (p->buf_idx == E.cur_buftab) ? &E.buf
+                                                    : &E.buftabs[p->buf_idx].buf;
+                dcx = p->cx; dcy = p->cy;
+            }
+            Pane gp   = *p;
+            gp.left   = group_left;
+            gp.width  = group_right - group_left;
+            draw_pane_status(&ab, &gp, dbuf, dcx, dcy, is_active);
+        }
+    }
+
+    draw_dividers(&ab);
+    draw_global_command_bar(&ab);
+
+    /* Cursor shape. */
+    ab_append(&ab, (E.mode == MODE_NORMAL) ? "\x1b[1 q" : "\x1b[6 q", 5);
+
+    /* Cursor position. */
     char buf[32];
     int  len;
+    Pane *ap = &E.panes[E.cur_pane];
     if (E.mode == MODE_COMMAND) {
         len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
-                       E.screenrows + 2, E.cmdlen + 2);
+                       E.term_rows, E.cmdlen + 2);
     } else if (E.mode == MODE_SEARCH) {
         len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
-                       E.screenrows + 2, E.searchlen + 2);
+                       E.term_rows, E.searchlen + 2);
     } else {
         len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
-                       (E.cy - E.rowoff) + 1,
-                       (E.cx - E.coloff) + 1 + gutter_width());
+                       ap->top  + (E.cy - E.rowoff),
+                       ap->left + (E.cx - E.coloff) + gutter_width());
     }
     ab_append(&ab, buf, len);
-
     ab_append(&ab, "\x1b[?25h", 6);  /* show cursor */
 
     write(STDOUT_FILENO, ab.b, ab.len);

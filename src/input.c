@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -781,6 +782,116 @@ static void editor_move_cursor(int key) {
     if (E.cx > rowlen) E.cx = rowlen;
 }
 
+/* ── Pane helpers ────────────────────────────────────────────────────── */
+
+static void pane_save_cursor(void) {
+    Pane *p  = &E.panes[E.cur_pane];
+    p->cx    = E.cx;     p->cy    = E.cy;
+    p->rowoff = E.rowoff; p->coloff = E.coloff;
+}
+
+static void pane_activate(int idx) {
+    pane_save_cursor();
+    int old_buf = E.panes[E.cur_pane].buf_idx;
+    int new_buf = E.panes[idx].buf_idx;
+    if (old_buf != new_buf) editor_buf_save(old_buf);
+    E.cur_pane   = idx;
+    Pane *p      = &E.panes[idx];
+    E.screenrows = p->height;
+    E.screencols = p->width;
+    E.cx = p->cx; E.cy = p->cy;
+    E.rowoff = p->rowoff; E.coloff = p->coloff;
+    E.cur_buftab = new_buf;
+    if (old_buf != new_buf) editor_buf_restore(new_buf);
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+}
+
+static int pane_split_h(int idx) {
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return 0; }
+    Pane *p = &E.panes[idx];
+    int H = p->height;
+    if (H < 3) { status_err("Pane too small to split"); return 0; }
+    int h_a = (H - 1) / 2, h_b = H - 1 - h_a;
+    for (int i = E.num_panes; i > idx + 1; i--) E.panes[i] = E.panes[i-1];
+    E.num_panes++;
+    p->height = h_a;
+    Pane *np  = &E.panes[idx + 1];
+    *np       = *p;
+    np->top   = p->top + h_a + 1;  /* skip status bar row */
+    np->height = h_b;
+    return 1;
+}
+
+static int pane_split_v(int idx) {
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return 0; }
+    Pane *p = &E.panes[idx];
+    if (p->width < 11) { status_err("Pane too narrow to split"); return 0; }
+    int w_a = p->width / 2, w_b = p->width - w_a - 1;  /* -1 for divider col */
+    for (int i = E.num_panes; i > idx + 1; i--) E.panes[i] = E.panes[i-1];
+    E.num_panes++;
+    p->width  = w_a;
+    Pane *np  = &E.panes[idx + 1];
+    *np       = *p;
+    np->left  = p->left + w_a + 1;  /* skip divider column */
+    np->width = w_b;
+    return 1;
+}
+
+static void pane_close(int idx) {
+    if (E.num_panes == 1) { status_err("Only one window"); return; }
+    Pane *p = &E.panes[idx];
+    int donor = -1;
+    /* Horizontal neighbors (same left+width). */
+    for (int i = 0; i < E.num_panes && donor == -1; i++) {
+        if (i == idx) continue;
+        Pane *q = &E.panes[i];
+        if (q->left == p->left && q->width == p->width) {
+            if (q->top + q->height + 1 == p->top)
+                { q->height += p->height + 1; donor = i; }
+            else if (p->top + p->height + 1 == q->top)
+                { q->top = p->top; q->height += p->height + 1; donor = i; }
+        }
+    }
+    /* Vertical neighbors (same top+height). */
+    for (int i = 0; i < E.num_panes && donor == -1; i++) {
+        if (i == idx) continue;
+        Pane *q = &E.panes[i];
+        if (q->top == p->top && q->height == p->height) {
+            if (q->left + q->width + 1 == p->left)          /* +1 = divider col */
+                { q->width += p->width + 1; donor = i; }
+            else if (p->left + p->width + 1 == q->left)
+                { q->left = p->left; q->width += p->width + 1; donor = i; }
+        }
+    }
+    if (donor == -1) { status_err("Cannot close pane"); return; }
+    for (int i = idx; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i+1];
+    E.num_panes--;
+    if (donor > idx) donor--;
+    E.cur_pane = donor;
+    pane_activate(donor);
+}
+
+static void pane_navigate(int dir) {
+    Pane *cur = &E.panes[E.cur_pane];
+    int best = -1, best_dist = INT_MAX;
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i == E.cur_pane) continue;
+        Pane *p = &E.panes[i];
+        int ok = 0;
+        if      (dir == 'h') ok = (p->left + p->width  <= cur->left);
+        else if (dir == 'l') ok = (p->left >= cur->left + cur->width);
+        else if (dir == 'k') ok = (p->top  + p->height <= cur->top);
+        else if (dir == 'j') ok = (p->top  >= cur->top  + cur->height);
+        if (!ok) continue;
+        int d = abs((p->top  + p->height / 2) - (cur->top  + cur->height / 2))
+              + abs((p->left + p->width  / 2) - (cur->left + cur->width  / 2));
+        if (d < best_dist) { best_dist = d; best = i; }
+    }
+    if (best == -1) status_err("No window in that direction");
+    else            pane_activate(best);
+}
+
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
@@ -806,7 +917,8 @@ static void switch_to_buf(int idx) {
     E.statusmsg[0]        = '\0';
     E.statusmsg_is_error  = 0;
     E.mode                = MODE_NORMAL;
-    E.cur_buftab          = idx;
+    E.cur_buftab                      = idx;
+    E.panes[E.cur_pane].buf_idx       = idx;
     editor_buf_restore(idx);
 }
 
@@ -935,6 +1047,19 @@ void editor_execute_command(void) {
 
             /* ── quit ──────────────────────────────────────────────── */
             if (dq) {
+                /* Multi-pane: if other panes still show this buffer,
+                   just close this pane instead of the whole buffer. */
+                if (!da && E.num_panes > 1) {
+                    int shared = 0;
+                    for (int i = 0; i < E.num_panes; i++)
+                        if (E.panes[i].buf_idx == E.cur_buftab) shared++;
+                    if (shared > 1) {
+                        pane_save_cursor();
+                        editor_buf_save(E.cur_buftab);
+                        pane_close(E.cur_pane);
+                        goto done;
+                    }
+                }
                 if (da) {
                     /* :qa / :wqa[!] — quit everything */
                     if (!df) {
@@ -983,6 +1108,70 @@ void editor_execute_command(void) {
         }
     }
 
+    /* ── :split / :sp [filename] ──────────────────────────────────── */
+    if ((strncmp(cmd, "split", 5) == 0 || strncmp(cmd, "sp", 2) == 0) &&
+        (cmd[strncmp(cmd,"split",5)==0 ? 5 : 2] == '\0' ||
+         cmd[strncmp(cmd,"split",5)==0 ? 5 : 2] == ' ')) {
+        int kw   = (strncmp(cmd, "split", 5) == 0) ? 5 : 2;
+        const char *arg = (cmd[kw] == ' ' && cmd[kw+1]) ? cmd + kw + 1 : NULL;
+        pane_save_cursor();
+        if (pane_split_h(E.cur_pane)) {
+            int new_idx = E.cur_pane + 1;
+            E.panes[new_idx].cx     = E.cx;
+            E.panes[new_idx].cy     = E.cy;
+            E.panes[new_idx].rowoff = E.rowoff;
+            E.panes[new_idx].coloff = E.coloff;
+            pane_activate(new_idx);
+            if (arg) {
+                open_new_buf(arg);
+                E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+            }
+        }
+        goto done;
+
+    /* ── :vsplit / :vs [filename] ──────────────────────────────────── */
+    } else if ((strncmp(cmd, "vsplit", 6) == 0 || strncmp(cmd, "vs", 2) == 0) &&
+               (cmd[strncmp(cmd,"vsplit",6)==0 ? 6 : 2] == '\0' ||
+                cmd[strncmp(cmd,"vsplit",6)==0 ? 6 : 2] == ' ')) {
+        int kw   = (strncmp(cmd, "vsplit", 6) == 0) ? 6 : 2;
+        const char *arg = (cmd[kw] == ' ' && cmd[kw+1]) ? cmd + kw + 1 : NULL;
+        pane_save_cursor();
+        if (pane_split_v(E.cur_pane)) {
+            int new_idx = E.cur_pane + 1;
+            E.panes[new_idx].cx     = E.cx;
+            E.panes[new_idx].cy     = E.cy;
+            E.panes[new_idx].rowoff = E.rowoff;
+            E.panes[new_idx].coloff = E.coloff;
+            pane_activate(new_idx);
+            if (arg) {
+                open_new_buf(arg);
+                E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+            }
+        }
+        goto done;
+
+    /* ── :close ────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "close") == 0) {
+        pane_save_cursor();
+        editor_buf_save(E.cur_buftab);
+        pane_close(E.cur_pane);
+        goto done;
+
+    /* ── :only ─────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "only") == 0) {
+        int keep = E.cur_pane;
+        E.panes[0]      = E.panes[keep];
+        E.num_panes     = 1;
+        E.cur_pane      = 0;
+        E.panes[0].top    = 1;
+        E.panes[0].left   = 1;
+        E.panes[0].height = E.term_rows - 2;
+        E.panes[0].width  = E.term_cols;
+        E.screenrows      = E.panes[0].height;
+        E.screencols      = E.panes[0].width;
+        goto done;
+    }
+
     /* ── :e [!] [filename] ─────────────────────────────────────────── */
     if ((cmd[0] == 'e') &&
         (cmd[1] == '\0' || cmd[1] == '!' || cmd[1] == ' ')) {
@@ -1000,20 +1189,34 @@ void editor_execute_command(void) {
             goto done;
         }
         char *fname = strdup(target);
-        buf_free(&E.buf);
-        undo_stack_clear(&E.undo_stack);
-        undo_stack_clear(&E.redo_stack);
-        if (E.has_pre_insert) {
-            undo_state_free(&E.pre_insert_snapshot);
-            E.has_pre_insert = 0;
+
+        /* If another pane is showing this buffer, open the file in a new
+           buftab so that pane is unaffected; otherwise open in-place. */
+        int buf_shared = 0;
+        for (int i = 0; i < E.num_panes; i++) {
+            if (i != E.cur_pane && E.panes[i].buf_idx == E.cur_buftab)
+                { buf_shared = 1; break; }
         }
-        la_free();
-        E.cx = 0; E.cy = 0;
-        E.rowoff = 0; E.coloff = 0;
-        buf_open(&E.buf, fname);
+
+        if (buf_shared) {
+            if (open_new_buf(fname))
+                E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+        } else {
+            buf_free(&E.buf);
+            undo_stack_clear(&E.undo_stack);
+            undo_stack_clear(&E.redo_stack);
+            if (E.has_pre_insert) {
+                undo_state_free(&E.pre_insert_snapshot);
+                E.has_pre_insert = 0;
+            }
+            la_free();
+            E.cx = 0; E.cy = 0;
+            E.rowoff = 0; E.coloff = 0;
+            buf_open(&E.buf, fname);
+            editor_detect_syntax();
+            status_msg("\"%s\"", E.buf.filename);
+        }
         free(fname);
-        editor_detect_syntax();
-        status_msg("\"%s\"", E.buf.filename);
 
     /* ── :bnew [filename] ──────────────────────────────────────────── */
     } else if (strcmp(cmd, "bnew") == 0 ||
@@ -1118,6 +1321,30 @@ static void editor_redo(void) {
 static void editor_process_normal(int c) {
     E.statusmsg[0] = '\0';  /* clear one-shot message on any keypress */
     E.statusmsg_is_error = 0;
+
+    /* Ctrl-W second-key dispatch. */
+    if (E.pending_ctrlw) {
+        E.pending_ctrlw = 0;
+        switch (c) {
+            case 'h': case 'j': case 'k': case 'l':
+                pane_navigate(c);
+                break;
+            case 0x17:  /* Ctrl-W Ctrl-W = cycle */
+                if (E.num_panes > 1)
+                    pane_activate((E.cur_pane + 1) % E.num_panes);
+                break;
+            case 'c': case 'q':
+                pane_save_cursor();
+                editor_buf_save(E.cur_buftab);
+                pane_close(E.cur_pane);
+                break;
+            default:
+                status_err("Unknown Ctrl-W command");
+                break;
+        }
+        return;
+    }
+
     if (lua_bridge_call_key(MODE_NORMAL, c)) return;
 
     /* Accumulate count prefix digits: 1-9 always; 0 only if count already started. */
@@ -1150,6 +1377,11 @@ static void editor_process_normal(int c) {
     switch (c) {
         /* --- cancel / ESC --- */
         case '\x1b':
+            break;
+
+        /* --- Ctrl-W: window command prefix --- */
+        case 0x17:
+            E.pending_ctrlw = 1;
             break;
 
         /* --- mode switches (count ignored) --- */

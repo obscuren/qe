@@ -7,7 +7,16 @@
 #include "search.h"
 #include "syntax.h"
 
-#define MAX_BUFS 32
+#define MAX_BUFS  32
+#define MAX_PANES  8
+
+typedef struct {
+    int top, left;      /* 1-based terminal row/col of first content row/col */
+    int height, width;  /* content rows (excludes status bar row); columns   */
+    int buf_idx;        /* into buftabs[]; == E.cur_buftab means live E.buf  */
+    int cx, cy;         /* saved cursor   (synced from E.* when active)      */
+    int rowoff, coloff; /* saved scroll   (synced from E.* when active)      */
+} Pane;
 
 /* Parked state of an inactive buffer (stored while another buffer is live). */
 typedef struct {
@@ -122,6 +131,14 @@ typedef struct {
     BufTab buftabs[MAX_BUFS]; /* parked state of all inactive buffers */
     int    num_buftabs;       /* total open buffers including the live one */
     int    cur_buftab;        /* 0-based index of the live buffer */
+
+    /* Split panes */
+    Pane   panes[MAX_PANES];
+    int    num_panes;         /* 1 = single pane (startup default) */
+    int    cur_pane;          /* index of active pane              */
+    int    pending_ctrlw;     /* 1 = waiting for Ctrl-W second key */
+    int    term_rows;         /* raw terminal height from ioctl    */
+    int    term_cols;         /* raw terminal width  from ioctl    */
 } EditorConfig;
 
 extern EditorConfig E;

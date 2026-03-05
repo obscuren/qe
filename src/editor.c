@@ -25,10 +25,18 @@ void editor_init(void) {
 
     buf_init(&E.buf);
 
-    if (term_get_size(&E.screenrows, &E.screencols) == -1)
+    if (term_get_size(&E.term_rows, &E.term_cols) == -1)
         die("term_get_size");
 
-    E.screenrows -= 2;  /* status bar + command bar */
+    E.screenrows = E.term_rows - 2;  /* status bar + command bar */
+    E.screencols = E.term_cols;
+
+    E.num_panes     = 1;
+    E.cur_pane      = 0;
+    E.pending_ctrlw = 0;
+    E.panes[0] = (Pane){ .top=1, .left=1,
+                         .height=E.screenrows, .width=E.screencols,
+                         .buf_idx=0 };
 
     E.undo_stack.count = 0;
     E.redo_stack.count = 0;

@@ -220,7 +220,38 @@ All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) 
 
 Unsaved changes are indicated by `[+]` in the status bar. Commands that would discard them require `!` to confirm.
 
-`:q` closes the current buffer. When only one buffer remains, `:q` quits the editor. The status bar shows `[n/total]` when multiple buffers are open.
+`:q` closes the current buffer (or pane, if multiple panes show the same buffer). When only one buffer remains, `:q` quits the editor. The status bar shows `[n/total]` when multiple buffers are open.
+
+### Split windows
+
+| Command              | Action                                             |
+|----------------------|----------------------------------------------------|
+| `:split [file]`      | Split horizontally; optionally open file in new pane |
+| `:sp [file]`         | Same as `:split`                                   |
+| `:vsplit [file]`     | Split vertically; optionally open file in new pane |
+| `:vs [file]`         | Same as `:vsplit`                                  |
+| `:close`             | Close current pane (adjacent pane expands)         |
+| `:only`              | Close all other panes, keep only current           |
+
+#### Ctrl-W window navigation (Normal mode)
+
+| Key sequence   | Action                                  |
+|----------------|-----------------------------------------|
+| `Ctrl-W h`     | Move focus left                         |
+| `Ctrl-W j`     | Move focus down                         |
+| `Ctrl-W k`     | Move focus up                           |
+| `Ctrl-W l`     | Move focus right                        |
+| `Ctrl-W Ctrl-W`| Cycle to next pane                      |
+| `Ctrl-W c`     | Close current pane                      |
+| `Ctrl-W q`     | Close current pane                      |
+
+Each pane has its own cursor position and scroll offset. Two panes may display the same buffer simultaneously — edits in one are immediately visible in the other. The new pane becomes the active one immediately after a split.
+
+Vertical splits (`:vsplit`) are separated by a white divider column. Side-by-side panes share a single combined status bar spanning the full width; the active pane's info is shown in full reverse video, inactive panes in dim reverse video.
+
+Using `:e filename` inside a split pane opens the file in a new buffer, leaving the other pane's buffer untouched.
+
+The terminal is automatically redrawn on resize (`SIGWINCH`); the layout collapses to a single pane on resize.
 
 ### Tab completion for `:e`
 
