@@ -1175,10 +1175,12 @@ static void editor_process_visual(int c) {
    each keypress so the user's intended column is remembered across short lines. */
 static int s_vertical_move = 0;
 
-/* Restore cx from preferred_col on the (possibly new) current row. */
+/* Restore cx from preferred_col on the (possibly new) current row.
+   Clamps to len-1 so the cursor always lands on a character, not the newline. */
 static void apply_preferred_col(void) {
     int rowlen = E.cy < E.buf.numrows ? E.buf.rows[E.cy].len : 0;
-    E.cx = E.preferred_col < rowlen ? E.preferred_col : rowlen;
+    int maxcol = rowlen > 0 ? rowlen - 1 : 0;
+    E.cx = E.preferred_col <= maxcol ? E.preferred_col : maxcol;
 }
 
 static void editor_move_cursor(int key) {
@@ -1191,7 +1193,7 @@ static void editor_move_cursor(int key) {
             break;
         case ARROW_RIGHT:
         case 'l':
-            if (E.cx < rowlen) E.cx++;
+            if (rowlen > 0 && E.cx < rowlen - 1) E.cx++;
             break;
         case ARROW_UP:
         case 'k':
@@ -1207,7 +1209,7 @@ static void editor_move_cursor(int key) {
             E.cx = 0;
             break;
         case END_KEY:
-            E.cx = rowlen;
+            E.cx = rowlen > 0 ? rowlen - 1 : 0;
             break;
         case PAGE_UP:
             E.cy -= E.screenrows;
@@ -1228,7 +1230,9 @@ static void editor_move_cursor(int key) {
     if (s_vertical_move) {
         apply_preferred_col();
     } else {
-        if (E.cx > rowlen) E.cx = rowlen;
+        /* Clamp to last character (len-1), not past the newline. */
+        int maxcol = rowlen > 0 ? rowlen - 1 : 0;
+        if (E.cx > maxcol) E.cx = maxcol;
     }
 }
 
