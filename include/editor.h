@@ -137,6 +137,7 @@ typedef struct {
     int    num_panes;         /* 1 = single pane (startup default) */
     int    cur_pane;          /* index of active pane              */
     int    pending_ctrlw;     /* 1 = waiting for Ctrl-W second key */
+    int    pending_g;         /* 1 = waiting for g second key      */
     int    term_rows;         /* raw terminal height from ioctl    */
     int    term_cols;         /* raw terminal width  from ioctl    */
 } EditorConfig;

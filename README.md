@@ -80,8 +80,10 @@ The accumulating count and any pending operator are shown live in the status bar
 | `B`              | Move to start of line           |
 | `0`              | Move to start of line           |
 | `$`              | Move to end of line             |
+| `gg`             | Jump to first line              |
 | `G`              | Jump to last line               |
 | `{n}G`           | Jump to line n                  |
+| `%`              | Jump to matching bracket        |
 | `f{char}`        | Jump to next `char` on line     |
 | `F{char}`        | Jump to prev `char` on line     |
 | `t{char}`        | Jump to just before next `char` |

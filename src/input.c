@@ -1345,6 +1345,21 @@ static void editor_process_normal(int c) {
         return;
     }
 
+    /* g second-key dispatch. */
+    if (E.pending_g) {
+        E.pending_g = 0;
+        if (c == 'g') {
+            /* gg: go to first line (or line N with count prefix) */
+            int n = E.count > 0 ? E.count : 1;
+            E.count = 0;
+            E.cy = n - 1;
+            if (E.buf.numrows > 0 && E.cy >= E.buf.numrows)
+                E.cy = E.buf.numrows - 1;
+            E.cx = 0;
+        }
+        return;
+    }
+
     if (lua_bridge_call_key(MODE_NORMAL, c)) return;
 
     /* Accumulate count prefix digits: 1-9 always; 0 only if count already started. */
@@ -1705,6 +1720,19 @@ static void editor_process_normal(int c) {
                     E.cy = E.buf.numrows - 1;
             } else {
                 if (E.buf.numrows > 0) E.cy = E.buf.numrows - 1;
+            }
+            break;
+
+        /* --- g prefix (gg = first line) --- */
+        case 'g':
+            E.pending_g = 1;
+            break;
+
+        /* --- % : jump to matching bracket --- */
+        case '%':
+            if (E.match_bracket_valid) {
+                E.cy = E.match_bracket_row;
+                E.cx = E.match_bracket_col;
             }
             break;
 
