@@ -1171,6 +1171,16 @@ static void editor_process_visual(int c) {
 
 /* ── Cursor movement ─────────────────────────────────────────────────── */
 
+/* Set by vertical-move operations; suppresses preferred_col update at end of
+   each keypress so the user's intended column is remembered across short lines. */
+static int s_vertical_move = 0;
+
+/* Restore cx from preferred_col on the (possibly new) current row. */
+static void apply_preferred_col(void) {
+    int rowlen = E.cy < E.buf.numrows ? E.buf.rows[E.cy].len : 0;
+    E.cx = E.preferred_col < rowlen ? E.preferred_col : rowlen;
+}
+
 static void editor_move_cursor(int key) {
     int rowlen = (E.cy < E.buf.numrows) ? E.buf.rows[E.cy].len : 0;
 
@@ -1186,10 +1196,12 @@ static void editor_move_cursor(int key) {
         case ARROW_UP:
         case 'k':
             if (E.cy > 0) E.cy--;
+            s_vertical_move = 1;
             break;
         case ARROW_DOWN:
         case 'j':
             if (E.cy < E.buf.numrows - 1) E.cy++;
+            s_vertical_move = 1;
             break;
         case HOME_KEY:
             E.cx = 0;
@@ -1200,6 +1212,7 @@ static void editor_move_cursor(int key) {
         case PAGE_UP:
             E.cy -= E.screenrows;
             if (E.cy < 0) E.cy = 0;
+            s_vertical_move = 1;
             break;
         case PAGE_DOWN:
             E.cy += E.screenrows;
@@ -1207,12 +1220,16 @@ static void editor_move_cursor(int key) {
                 E.cy = E.buf.numrows - 1;
             else if (E.buf.numrows == 0)
                 E.cy = 0;
+            s_vertical_move = 1;
             break;
     }
 
-    /* Clamp cx to the (possibly new) row length after vertical moves. */
     rowlen = (E.cy < E.buf.numrows) ? E.buf.rows[E.cy].len : 0;
-    if (E.cx > rowlen) E.cx = rowlen;
+    if (s_vertical_move) {
+        apply_preferred_col();
+    } else {
+        if (E.cx > rowlen) E.cx = rowlen;
+    }
 }
 
 /* ── Pane helpers ────────────────────────────────────────────────────── */
@@ -1788,7 +1805,8 @@ static void editor_process_normal(int c) {
             E.cy = n - 1;
             if (E.buf.numrows > 0 && E.cy >= E.buf.numrows)
                 E.cy = E.buf.numrows - 1;
-            E.cx = 0;
+            s_vertical_move = 1;
+            apply_preferred_col();
         }
         return;
     }
@@ -2159,6 +2177,8 @@ static void editor_process_normal(int c) {
             } else {
                 if (E.buf.numrows > 0) E.cy = E.buf.numrows - 1;
             }
+            s_vertical_move = 1;
+            apply_preferred_col();
             break;
 
         /* --- g prefix (gg = first line) --- */
@@ -2550,10 +2570,13 @@ void editor_process_keypress(void) {
     /* Mouse events are handled in all modes. */
     if (c == MOUSE_PRESS) {
         handle_mouse_press();
+        E.preferred_col = E.cx;   /* click sets a new preferred column */
         return;
     }
     if (c == MOUSE_SCROLL_UP)   { handle_mouse_scroll(-1); return; }
     if (c == MOUSE_SCROLL_DOWN) { handle_mouse_scroll(+1); return; }
+
+    s_vertical_move = 0;
 
     switch (E.mode) {
         case MODE_NORMAL:      editor_process_normal(c);  break;
@@ -2563,4 +2586,8 @@ void editor_process_keypress(void) {
         case MODE_VISUAL:
         case MODE_VISUAL_LINE: editor_process_visual(c);  break;
     }
+
+    /* After any non-vertical-move action, record the current column as the
+       preferred column so future j/k movements try to restore it. */
+    if (!s_vertical_move) E.preferred_col = E.cx;
 }
