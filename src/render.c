@@ -402,12 +402,31 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
             snprintf(prefix, sizeof(prefix), "%d", E.count);
         else if (E.pending_op)
             snprintf(prefix, sizeof(prefix), "%c", E.pending_op);
+
+        char pos[16];
+        if (buf->numrows <= 1 || pcy == 0)
+            strcpy(pos, "Top");
+        else if (pcy >= buf->numrows - 1)
+            strcpy(pos, "Bot");
+        else
+            snprintf(pos, sizeof(pos), "%d%%", (pcy * 100) / (buf->numrows - 1));
+
         rlen = prefix[0]
-            ? snprintf(right, sizeof(right), "%s    %d,%d ", prefix, pcy + 1, pcx + 1)
-            : snprintf(right, sizeof(right), "%d,%d ", pcy + 1, pcx + 1);
+            ? snprintf(right, sizeof(right), "%s    %d,%-3d   %-4s",
+                       prefix, pcy + 1, pcx + 1, pos)
+            : snprintf(right, sizeof(right), "%d,%-3d   %-4s",
+                       pcy + 1, pcx + 1, pos);
     } else {
+        char pos[16];
+        if (buf->numrows <= 1 || pcy == 0)
+            strcpy(pos, "Top");
+        else if (pcy >= buf->numrows - 1)
+            strcpy(pos, "Bot");
+        else
+            snprintf(pos, sizeof(pos), "%d%%", (pcy * 100) / (buf->numrows - 1));
+
         llen = snprintf(left,  sizeof(left),  " %.30s%s", name, buf->dirty ? " [+]" : "");
-        rlen = snprintf(right, sizeof(right), "%d,%d ", pcy + 1, pcx + 1);
+        rlen = snprintf(right, sizeof(right), "%d,%-3d   %-4s", pcy + 1, pcx + 1, pos);
     }
 
     if (llen > p->width) llen = p->width;
