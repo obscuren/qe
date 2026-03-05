@@ -12,6 +12,9 @@ enum EditorKey {
     HOME_KEY,
     END_KEY,
     DEL_KEY,
+    MOUSE_PRESS,
+    MOUSE_SCROLL_UP,
+    MOUSE_SCROLL_DOWN,
 };
 
 int  editor_read_key(void);

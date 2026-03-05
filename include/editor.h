@@ -139,6 +139,7 @@ typedef struct {
     int    cur_pane;          /* index of active pane              */
     int    pending_ctrlw;     /* 1 = waiting for Ctrl-W second key */
     int    pending_g;         /* 1 = waiting for g second key      */
+    int    mouse_x, mouse_y;  /* last mouse event terminal coords (1-based) */
     int    term_rows;         /* raw terminal height from ioctl    */
     int    term_cols;         /* raw terminal width  from ioctl    */
 } EditorConfig;

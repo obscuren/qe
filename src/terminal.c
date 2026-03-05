@@ -10,6 +10,7 @@
 static struct termios orig_termios;
 
 void term_disable_raw_mode(void) {
+    write(STDOUT_FILENO, "\x1b[?1000l\x1b[?1006l", 16); /* disable mouse */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1)
         die("tcsetattr");
 }
@@ -37,6 +38,8 @@ void term_enable_raw_mode(void) {
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
         die("tcsetattr");
+
+    write(STDOUT_FILENO, "\x1b[?1000h\x1b[?1006h", 16); /* enable mouse tracking + SGR mode */
 }
 
 int term_get_size(int *rows, int *cols) {

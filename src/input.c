@@ -39,6 +39,7 @@ int editor_read_key(void) {
     int nread;
     char c;
 
+again:
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
         if (nread == -1 && errno != EAGAIN)
             die("read");
@@ -52,6 +53,25 @@ int editor_read_key(void) {
     if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
 
     if (seq[0] == '[') {
+        /* SGR mouse: \x1b[<btn;x;yM (press) or \x1b[<btn;x;ym (release) */
+        if (seq[1] == '<') {
+            char buf[32]; int len = 0; char ch = 0;
+            while (len < 31 && read(STDIN_FILENO, &ch, 1) == 1
+                   && ch != 'M' && ch != 'm')
+                buf[len++] = ch;
+            buf[len] = '\0';
+            int btn = 0, mx = 0, my = 0;
+            sscanf(buf, "%d;%d;%d", &btn, &mx, &my);
+            if (ch == 'M') {  /* press / drag */
+                E.mouse_x = mx;
+                E.mouse_y = my;
+                if (btn == 0)  return MOUSE_PRESS;
+                if (btn == 64) return MOUSE_SCROLL_UP;
+                if (btn == 65) return MOUSE_SCROLL_DOWN;
+            }
+            goto again;  /* release or unhandled button — ignore */
+        }
+
         if (seq[1] >= '0' && seq[1] <= '9') {
             if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
             if (seq[2] == '~') {
@@ -2210,8 +2230,93 @@ static void editor_process_search(int c) {
 
 /* ── Dispatch ────────────────────────────────────────────────────────── */
 
+/* Compute gutter width for a buffer (mirrors render.c logic). */
+static int gutter_width_for_buf(const Buffer *buf) {
+    if (!E.opts.line_numbers || buf->numrows == 0) return 0;
+    int n = buf->numrows, w = 0;
+    while (n > 0) { w++; n /= 10; }
+    return w + 1;
+}
+
+/* Handle a mouse click: focus the pane and position the cursor. */
+static void handle_mouse_press(void) {
+    int mx = E.mouse_x, my = E.mouse_y;
+
+    /* Find the pane that contains the click. */
+    int target = -1;
+    for (int i = 0; i < E.num_panes; i++) {
+        Pane *p = &E.panes[i];
+        if (my >= p->top && my <= p->top + p->height &&
+            mx >= p->left && mx < p->left + p->width) {
+            target = i;
+            break;
+        }
+    }
+    if (target == -1) return;
+
+    /* If in insert/visual mode, return to normal first. */
+    if (E.mode == MODE_INSERT || E.mode == MODE_VISUAL ||
+        E.mode == MODE_VISUAL_LINE) {
+        E.mode = MODE_NORMAL;
+        if (E.cx > 0 && E.cy < E.buf.numrows &&
+            E.cx >= E.buf.rows[E.cy].len) E.cx--;
+    }
+
+    /* Activate the target pane (saves current cursor, restores target's). */
+    if (target != E.cur_pane) {
+        pane_save_cursor();
+        pane_activate(target);
+    }
+
+    Pane *p = &E.panes[E.cur_pane];
+
+    /* Click on status bar row: just focus, don't move cursor. */
+    if (my == p->top + p->height) return;
+
+    /* Convert terminal coords to file coords. */
+    int gw      = gutter_width_for_buf(&E.buf);
+    int filerow = (my - p->top) + E.rowoff;
+    int filecol = (mx - p->left - gw) + E.coloff;
+    if (filecol < 0) filecol = 0;
+    if (filerow < 0) filerow = 0;
+    if (E.buf.numrows > 0) {
+        if (filerow >= E.buf.numrows) filerow = E.buf.numrows - 1;
+        int rowlen = E.buf.rows[filerow].len;
+        if (filecol > rowlen) filecol = rowlen;
+    } else {
+        filerow = 0; filecol = 0;
+    }
+    E.cy = filerow;
+    E.cx = filecol;
+}
+
+/* Handle mouse scroll: move the active pane's viewport by 3 lines. */
+static void handle_mouse_scroll(int dir) {
+    int delta = 3;
+    if (dir < 0) {  /* scroll up */
+        E.rowoff -= delta;
+        if (E.rowoff < 0) E.rowoff = 0;
+        if (E.cy > E.rowoff + E.screenrows - 1)
+            E.cy = E.rowoff + E.screenrows - 1;
+    } else {        /* scroll down */
+        int max_off = E.buf.numrows > E.screenrows
+                      ? E.buf.numrows - E.screenrows : 0;
+        E.rowoff += delta;
+        if (E.rowoff > max_off) E.rowoff = max_off;
+        if (E.cy < E.rowoff) E.cy = E.rowoff;
+    }
+}
+
 void editor_process_keypress(void) {
     int c = editor_read_key();
+
+    /* Mouse events are handled in all modes. */
+    if (c == MOUSE_PRESS) {
+        handle_mouse_press();
+        return;
+    }
+    if (c == MOUSE_SCROLL_UP)   { handle_mouse_scroll(-1); return; }
+    if (c == MOUSE_SCROLL_DOWN) { handle_mouse_scroll(+1); return; }
 
     switch (E.mode) {
         case MODE_NORMAL:      editor_process_normal(c);  break;
