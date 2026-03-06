@@ -1299,6 +1299,14 @@ static int pane_split_v(int idx) {
 
 static void pane_close(int idx) {
     if (E.num_panes == 1) { status_err("Only one window"); return; }
+
+    /* Save cursor of the currently active pane before any changes. */
+    pane_save_cursor();
+
+    /* Track last content pane when leaving one. */
+    if (!E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree)
+        E.last_content_pane = E.cur_pane;
+
     Pane *p = &E.panes[idx];
     int donor = -1;
     /* Horizontal neighbors (same left+width). */
@@ -1324,11 +1332,28 @@ static void pane_close(int idx) {
         }
     }
     if (donor == -1) { status_err("Cannot close pane"); return; }
+
     for (int i = idx; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i+1];
     E.num_panes--;
     if (donor > idx) donor--;
-    E.cur_pane = donor;
-    pane_activate(donor);
+
+    /* Switch to the donor pane.  Use E.cur_buftab (what is actually live in
+       E.buf) to decide whether a save+restore is needed — NOT E.panes[].buf_idx,
+       which may have been pre-set by the caller before we got here. */
+    Pane *dp      = &E.panes[donor];
+    int donor_buf = dp->buf_idx;
+    if (E.cur_buftab != donor_buf) {
+        editor_buf_save(E.cur_buftab);
+        editor_buf_restore(donor_buf);
+        E.cur_buftab = donor_buf;
+    }
+    E.cur_pane   = donor;
+    E.screenrows = dp->height;
+    E.screencols = dp->width;
+    E.cx = dp->cx; E.cy = dp->cy;
+    E.rowoff = dp->rowoff; E.coloff = dp->coloff;
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
 }
 
 static void pane_navigate(int dir) {
@@ -1465,38 +1490,68 @@ static void editor_open_tree_pane(void) {
         if (E.buftabs[E.panes[i].buf_idx].is_tree) { tree_pane = i; break; }
     }
     if (tree_pane >= 0) {
-        /* If we're currently in the tree pane, move to the content pane first
-           so that pane_close gets the right donor and buffer. */
-        if (E.cur_pane == tree_pane) {
-            int cpane = E.last_content_pane;
-            if (cpane >= E.num_panes || E.buftabs[E.panes[cpane].buf_idx].is_tree) {
-                for (int i = 0; i < E.num_panes; i++) {
-                    if (!E.buftabs[E.panes[i].buf_idx].is_tree) { cpane = i; break; }
-                }
+        Pane *tp = &E.panes[tree_pane];
+        int tree_right = tp->left + tp->width + 1; /* first col of content panes */
+
+        /* Find the content pane to activate after removal. */
+        int cpane = E.last_content_pane;
+        if (cpane >= E.num_panes || cpane == tree_pane ||
+            E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+            cpane = -1;
+            for (int i = 0; i < E.num_panes; i++) {
+                if (i != tree_pane && !E.buftabs[E.panes[i].buf_idx].is_tree)
+                    { cpane = i; break; }
             }
-            if (cpane < E.num_panes)
-                pane_activate(cpane);
-            /* Refresh tree_pane index — pane_activate doesn't shift panes. */
         }
-        pane_close(tree_pane);
-        E.screenrows = E.panes[E.cur_pane].height;
-        E.screencols = E.panes[E.cur_pane].width;
+
+        /* Expand every pane immediately right of the tree to reclaim its width. */
+        for (int i = 0; i < E.num_panes; i++) {
+            if (i == tree_pane) continue;
+            if (E.panes[i].left == tree_right) {
+                E.panes[i].left  = tp->left;
+                E.panes[i].width += tp->width + 1;
+            }
+        }
+
+        /* Remove tree pane from array. */
+        for (int i = tree_pane; i < E.num_panes - 1; i++)
+            E.panes[i] = E.panes[i + 1];
+        E.num_panes--;
+        if (cpane > tree_pane) cpane--;
+
+        /* Switch to the content pane. */
+        if (cpane >= 0) {
+            int donor_buf = E.panes[cpane].buf_idx;
+            if (E.cur_buftab != donor_buf) {
+                editor_buf_save(E.cur_buftab);
+                editor_buf_restore(donor_buf);
+                E.cur_buftab = donor_buf;
+            }
+            E.cur_pane   = cpane;
+            E.screenrows = E.panes[cpane].height;
+            E.screencols = E.panes[cpane].width;
+            E.cx = E.panes[cpane].cx; E.cy = E.panes[cpane].cy;
+            E.rowoff = E.panes[cpane].rowoff; E.coloff = E.panes[cpane].coloff;
+        }
+        E.mode = MODE_NORMAL;
+        E.match_bracket_valid = 0;
         return;
     }
 
-    /* Not open: create tree pane on the left side of the current pane. */
+    /* Not open: create tree pane on the far left, spanning the full height. */
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
-    if (E.panes[E.cur_pane].width <= TREE_WIDTH + 5)
-        { status_err("Pane too narrow for tree"); return; }
 
-    int cp_idx    = E.cur_pane;
-    int cp_top    = E.panes[cp_idx].top;
-    int cp_left   = E.panes[cp_idx].left;
-    int cp_height = E.panes[cp_idx].height;
-    int cp_width  = E.panes[cp_idx].width;
-    int cp_buf    = E.panes[cp_idx].buf_idx;
+    /* Verify every pane in the left zone will still have enough width. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (E.panes[i].left < TREE_WIDTH + 2) {
+            int new_width = E.panes[i].width - (TREE_WIDTH + 2 - E.panes[i].left);
+            if (new_width < 5) { status_err("Pane too narrow for tree"); return; }
+        }
+    }
 
+    int cp_idx = E.cur_pane;
+    int cp_buf = E.panes[cp_idx].buf_idx;
     E.last_content_pane = cp_idx;
 
     /* Allocate a new buftab for the tree buffer. */
@@ -1527,29 +1582,35 @@ static void editor_open_tree_pane(void) {
     E.pending_op = '\0';
     E.count      = 0;
 
-    /* Insert tree pane at cp_idx; content pane shifts to cp_idx+1. */
-    for (int i = E.num_panes; i > cp_idx; i--) E.panes[i] = E.panes[i-1];
+    /* Push all panes that overlap the tree zone to the right of it. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (E.panes[i].left < TREE_WIDTH + 2) {
+            int shift = TREE_WIDTH + 2 - E.panes[i].left;
+            E.panes[i].width -= shift;
+            E.panes[i].left   = TREE_WIDTH + 2;
+        }
+    }
+
+    /* Insert tree pane at index 0 (all others shift up by one). */
+    for (int i = E.num_panes; i > 0; i--) E.panes[i] = E.panes[i-1];
     E.num_panes++;
+    E.last_content_pane = cp_idx + 1;  /* shifted by insertion */
 
-    /* Tree pane geometry. */
-    E.panes[cp_idx].top     = cp_top;
-    E.panes[cp_idx].left    = cp_left;
-    E.panes[cp_idx].height  = cp_height;
-    E.panes[cp_idx].width   = TREE_WIDTH;
-    E.panes[cp_idx].buf_idx = tidx;
-    E.panes[cp_idx].cx      = 0;
-    E.panes[cp_idx].cy      = 0;
-    E.panes[cp_idx].rowoff  = 0;
-    E.panes[cp_idx].coloff  = 0;
+    /* Tree pane: far left, full terminal height. */
+    E.panes[0].top     = 1;
+    E.panes[0].left    = 1;
+    E.panes[0].height  = E.term_rows - 2;
+    E.panes[0].width   = TREE_WIDTH;
+    E.panes[0].buf_idx = tidx;
+    E.panes[0].cx      = 0;
+    E.panes[0].cy      = 0;
+    E.panes[0].rowoff  = 0;
+    E.panes[0].coloff  = 0;
 
-    /* Content pane geometry (already shifted to cp_idx+1 by memmove above). */
-    E.panes[cp_idx + 1].left  = cp_left + TREE_WIDTH + 1;
-    E.panes[cp_idx + 1].width = cp_width - TREE_WIDTH - 1;
-
-    /* Activate tree pane (no buffer switch needed — we manage manually). */
-    E.cur_pane   = cp_idx;
+    /* Activate tree pane (buffer managed manually above). */
+    E.cur_pane   = 0;
     E.cur_buftab = tidx;
-    E.screenrows = cp_height;
+    E.screenrows = E.term_rows - 2;
     E.screencols = TREE_WIDTH;
     E.cx = 0; E.cy = 0; E.rowoff = 0; E.coloff = 0;
     E.mode = MODE_NORMAL;
@@ -1693,10 +1754,32 @@ void editor_execute_command(void) {
 
         if ((dw || dq) && (*p == '\0' || arg)) {
 
-            /* Tree pane is read-only; :q from tree closes the sidebar. */
+            /* Tree pane is read-only; :q from tree closes sidebar or quits. */
             if (E.buftabs[E.cur_buftab].is_tree) {
                 if (dw) { status_err("Tree pane is read-only"); goto done; }
-                if (dq) { editor_open_tree_pane(); goto done; }
+                if (dq) {
+                    if (E.num_panes > 1) {
+                        /* Other panes exist — just close the tree sidebar. */
+                        editor_open_tree_pane();
+                    } else {
+                        /* Tree is the last pane — quit the editor. */
+                        if (!df) {
+                            for (int i = 0; i < E.num_buftabs; i++) {
+                                if (E.buftabs[i].is_tree) continue;
+                                Buffer *b = (i == E.cur_buftab)
+                                            ? &E.buf : &E.buftabs[i].buf;
+                                if (b->dirty) {
+                                    const char *fn = b->filename
+                                                     ? b->filename : "[No Name]";
+                                    status_err("Unsaved changes in \"%s\" (use :q! to force)", fn);
+                                    goto done;
+                                }
+                            }
+                        }
+                        editor_quit();
+                    }
+                    goto done;
+                }
             }
 
             /* ── write ─────────────────────────────────────────────── */
@@ -1751,26 +1834,12 @@ void editor_execute_command(void) {
 
             /* ── quit ──────────────────────────────────────────────── */
             if (dq) {
-                /* Multi-pane: if other panes still show this buffer,
-                   just close this pane instead of the whole buffer. */
-                if (!da && E.num_panes > 1) {
-                    int shared = 0;
-                    for (int i = 0; i < E.num_panes; i++)
-                        if (E.panes[i].buf_idx == E.cur_buftab) shared++;
-                    if (shared > 1) {
-                        pane_save_cursor();
-                        editor_buf_save(E.cur_buftab);
-                        pane_close(E.cur_pane);
-                        goto done;
-                    }
-                }
                 if (da) {
                     /* :qa / :wqa[!] — quit everything */
                     if (!df) {
-                        /* Collect names of still-dirty buffers */
                         char dirty_list[96] = "";
                         int  dirty_count = 0, pos = 0;
-                        if (E.buf.dirty) {
+                        if (E.buf.dirty && !E.buftabs[E.cur_buftab].is_tree) {
                             const char *fn = E.buf.filename
                                              ? E.buf.filename : "[No Name]";
                             const char *b = strrchr(fn, '/');
@@ -1780,7 +1849,7 @@ void editor_execute_command(void) {
                             dirty_count++;
                         }
                         for (int i = 0; i < E.num_buftabs; i++) {
-                            if (i == E.cur_buftab) continue;
+                            if (i == E.cur_buftab || E.buftabs[i].is_tree) continue;
                             if (E.buftabs[i].buf.dirty) {
                                 const char *fn = E.buftabs[i].buf.filename
                                                  ? E.buftabs[i].buf.filename
@@ -1803,9 +1872,16 @@ void editor_execute_command(void) {
                         }
                     }
                     editor_quit();
+                } else if (E.num_panes > 1) {
+                    /* Multiple panes: close this pane; buffer stays in list. */
+                    pane_close(E.cur_pane);
                 } else {
-                    /* :q / :wq[!] — quit current buffer */
-                    if (close_cur_buf(df)) editor_quit();
+                    /* Last pane: quit the editor. */
+                    if (!df && E.buf.dirty) {
+                        status_err("Unsaved changes (use :q! to override)");
+                        goto done;
+                    }
+                    editor_quit();
                 }
             }
             goto done;
@@ -1861,8 +1937,6 @@ void editor_execute_command(void) {
 
     /* ── :close ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "close") == 0) {
-        pane_save_cursor();
-        editor_buf_save(E.cur_buftab);
         pane_close(E.cur_pane);
         goto done;
 
@@ -2056,8 +2130,6 @@ static void editor_process_normal(int c) {
                     pane_activate((E.cur_pane + 1) % E.num_panes);
                 break;
             case 'c': case 'q':
-                pane_save_cursor();
-                editor_buf_save(E.cur_buftab);
                 pane_close(E.cur_pane);
                 break;
             default:

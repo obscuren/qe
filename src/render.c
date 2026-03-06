@@ -588,41 +588,20 @@ void editor_refresh_screen(void) {
         }
     }
 
-    /* Draw one combined status bar per group of panes sharing a status row.
-       Side-by-side panes from :vsplit share the same (top + height) row, so
-       they get one unified status bar spanning the full group width. */
-    {
-        int processed[MAX_PANES] = {0};
-        for (int i = 0; i < E.num_panes; i++) {
-            if (processed[i]) continue;
-            Pane *p         = &E.panes[i];
-            int  status_row = p->top + p->height;
-            int  group_left  = p->left;
-            int  group_right = p->left + p->width;
-            int  active_in_group = -1;
-            for (int j = 0; j < E.num_panes; j++) {
-                Pane *q = &E.panes[j];
-                if (q->top + q->height != status_row) continue;
-                processed[j] = 1;
-                if (q->left < group_left)             group_left  = q->left;
-                if (q->left + q->width > group_right) group_right = q->left + q->width;
-                if (j == E.cur_pane) active_in_group = j;
-            }
-            int is_active = (active_in_group >= 0);
-            const Buffer *dbuf;
-            int dcx, dcy;
-            if (is_active) {
-                dbuf = &E.buf; dcx = E.cx; dcy = E.cy;
-            } else {
-                dbuf = (p->buf_idx == E.cur_buftab) ? &E.buf
-                                                    : &E.buftabs[p->buf_idx].buf;
-                dcx = p->cx; dcy = p->cy;
-            }
-            Pane gp   = *p;
-            gp.left   = group_left;
-            gp.width  = group_right - group_left;
-            draw_pane_status(&ab, &gp, dbuf, dcx, dcy, is_active);
+    /* Draw one status bar per pane, each within its own column range. */
+    for (int i = 0; i < E.num_panes; i++) {
+        Pane *p       = &E.panes[i];
+        int is_active = (i == E.cur_pane);
+        const Buffer *dbuf;
+        int dcx, dcy;
+        if (is_active) {
+            dbuf = &E.buf; dcx = E.cx; dcy = E.cy;
+        } else {
+            dbuf = (p->buf_idx == E.cur_buftab) ? &E.buf
+                                                : &E.buftabs[p->buf_idx].buf;
+            dcx = p->cx; dcy = p->cy;
         }
+        draw_pane_status(&ab, p, dbuf, dcx, dcy, is_active);
     }
 
     draw_dividers(&ab);
