@@ -10,6 +10,9 @@
 
 #define MAX_BUFS  32
 #define MAX_PANES  8
+#define JUMP_MAX  100
+
+typedef struct { int buf_idx, row, col; } JumpEntry;
 
 typedef struct {
     int top, left;      /* 1-based terminal row/col of first content row/col */
@@ -152,6 +155,11 @@ typedef struct {
     int    mouse_x, mouse_y;  /* last mouse event terminal coords (1-based) */
     int    term_rows;         /* raw terminal height from ioctl    */
     int    term_cols;         /* raw terminal width  from ioctl    */
+
+    /* Jump list (Ctrl-O / Ctrl-I) */
+    JumpEntry jump_list[JUMP_MAX];
+    int       jump_count;     /* number of stored entries           */
+    int       jump_cur;       /* navigating index; == jump_count when live */
 } EditorConfig;
 
 extern EditorConfig E;

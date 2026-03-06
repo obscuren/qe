@@ -1638,7 +1638,10 @@ static void editor_quit(void) {
 static void completion_free(void);   /* forward declaration — defined below */
 
 /* Clear transient editing state and switch the live slot to idx. */
+static void jump_push(void);  /* forward declaration — defined after switch_to_buf */
+
 static void switch_to_buf(int idx) {
+    jump_push();
     editor_buf_save(E.cur_buftab);
     la_free();
     insert_rec_reset();
@@ -1652,6 +1655,83 @@ static void switch_to_buf(int idx) {
     E.cur_buftab                      = idx;
     E.panes[E.cur_pane].buf_idx       = idx;
     editor_buf_restore(idx);
+}
+
+/* ── Jump list (Ctrl-O / Ctrl-I) ─────────────────────────────────────── */
+
+/* Save current position before a jump.  Truncates any forward history. */
+static void jump_push(void) {
+    int buf = E.cur_buftab, row = E.cy, col = E.cx;
+
+    /* Truncate forward history if we navigated back and are now jumping. */
+    if (E.jump_cur < E.jump_count)
+        E.jump_count = E.jump_cur;
+
+    /* Skip duplicate of last entry. */
+    if (E.jump_count > 0) {
+        JumpEntry *t = &E.jump_list[E.jump_count - 1];
+        if (t->buf_idx == buf && t->row == row && t->col == col) {
+            E.jump_cur = E.jump_count;
+            return;
+        }
+    }
+
+    /* Evict oldest entry on overflow. */
+    if (E.jump_count >= JUMP_MAX) {
+        memmove(E.jump_list, E.jump_list + 1,
+                (JUMP_MAX - 1) * sizeof(JumpEntry));
+        E.jump_count = JUMP_MAX - 1;
+        if (E.jump_cur > 0) E.jump_cur--;
+    }
+
+    E.jump_list[E.jump_count++] = (JumpEntry){ buf, row, col };
+    E.jump_cur = E.jump_count;
+}
+
+static void jump_navigate(const JumpEntry *e) {
+    if (e->buf_idx != E.cur_buftab)
+        switch_to_buf(e->buf_idx);
+    E.cy = (E.buf.numrows > 0)
+           ? (e->row < E.buf.numrows ? e->row : E.buf.numrows - 1)
+           : 0;
+    int len = (E.buf.numrows > 0) ? E.buf.rows[E.cy].len : 0;
+    E.cx = (e->col <= len) ? e->col : len;
+    E.preferred_col = E.cx;
+}
+
+static void jump_back(void) {
+    if (E.jump_cur == E.jump_count) {
+        /* At live position: save it first so Ctrl-I can return. */
+        int buf = E.cur_buftab, row = E.cy, col = E.cx;
+        int dup = E.jump_count > 0
+               && E.jump_list[E.jump_count - 1].buf_idx == buf
+               && E.jump_list[E.jump_count - 1].row     == row
+               && E.jump_list[E.jump_count - 1].col     == col;
+        if (!dup) {
+            if (E.jump_count >= JUMP_MAX) {
+                memmove(E.jump_list, E.jump_list + 1,
+                        (JUMP_MAX - 1) * sizeof(JumpEntry));
+                E.jump_count = JUMP_MAX - 1;
+            }
+            E.jump_list[E.jump_count++] = (JumpEntry){ buf, row, col };
+        }
+        E.jump_cur = E.jump_count;
+        if (E.jump_count < 2) { status_err("Already at oldest jump"); return; }
+        E.jump_cur -= 2;
+    } else {
+        if (E.jump_cur == 0) { status_err("Already at oldest jump"); return; }
+        E.jump_cur--;
+    }
+    jump_navigate(&E.jump_list[E.jump_cur]);
+}
+
+static void jump_forward(void) {
+    if (E.jump_cur >= E.jump_count - 1) {
+        status_err("Already at newest jump");
+        return;
+    }
+    E.jump_cur++;
+    jump_navigate(&E.jump_list[E.jump_cur]);
 }
 
 /* Open a new buffer (empty if filename==NULL) and switch to it. */
@@ -2144,6 +2224,7 @@ static void editor_process_normal(int c) {
         E.pending_g = 0;
         if (c == 'g') {
             /* gg: go to first line (or line N with count prefix) */
+            jump_push();
             int n = E.count > 0 ? E.count : 1;
             E.count = 0;
             E.cy = n - 1;
@@ -2208,6 +2289,14 @@ static void editor_process_normal(int c) {
     switch (c) {
         /* --- cancel / ESC --- */
         case '\x1b':
+            break;
+
+        /* --- Ctrl-O / Ctrl-I: jump list navigation --- */
+        case 0x0f:  /* Ctrl-O */
+            jump_back();
+            break;
+        case '\t':  /* Ctrl-I */
+            jump_forward();
             break;
 
         /* --- Ctrl-W: window command prefix --- */
@@ -2308,6 +2397,7 @@ static void editor_process_normal(int c) {
         /* --- search repeat (n times) --- */
         case 'n': {
             if (!E.last_search_valid) break;
+            jump_push();
             for (int i = 0; i < n; i++) {
                 int row, col;
                 if (search_find_next(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
@@ -2322,6 +2412,7 @@ static void editor_process_normal(int c) {
 
         case 'N': {
             if (!E.last_search_valid) break;
+            jump_push();
             for (int i = 0; i < n; i++) {
                 int row, col;
                 if (search_find_prev(&E.last_query, &E.buf, E.cy, E.cx, &row, &col)) {
@@ -2535,6 +2626,7 @@ static void editor_process_normal(int c) {
 
         /* --- G: nG = go to line n, G = last line --- */
         case 'G':
+            jump_push();
             if (raw_count > 0) {
                 E.cy = raw_count - 1;  /* 1-based input → 0-based index */
                 if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
@@ -2554,6 +2646,7 @@ static void editor_process_normal(int c) {
         /* --- % : jump to matching bracket --- */
         case '%':
             if (E.match_bracket_valid) {
+                jump_push();
                 E.cy = E.match_bracket_row;
                 E.cx = E.match_bracket_col;
             }
@@ -2823,6 +2916,7 @@ static void editor_process_search(int c) {
                 int row, col;
                 if (search_find_next(&E.last_query, &E.buf,
                                      E.cy, E.cx, &row, &col)) {
+                    jump_push();
                     E.cy = row;
                     E.cx = col;
                 } else {

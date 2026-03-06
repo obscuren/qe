@@ -81,6 +81,9 @@ void editor_init(void) {
     E.completion_count   = 0;
     E.completion_idx     = -1;
 
+    E.jump_count = 0;
+    E.jump_cur   = 0;
+
     E.num_buftabs = 1;
     E.cur_buftab  = 0;
 }

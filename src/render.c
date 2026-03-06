@@ -124,11 +124,13 @@ static int visual_col_range_for(int filerow, int vis_anchor_row, int vis_anchor_
     return 1;
 }
 
-/* Priority (lowest → highest): syntax, bracket match, visual, search. */
+/* Priority (lowest → highest): syntax, bracket match, visual, search.
+   cursor_col (file coordinate, or -1) is exempted from all overlays so
+   the terminal cursor block always has a plain cell to blink over. */
 static void render_row_content(AppendBuf *ab, const Row *row,
                                int coloff, int visible_len,
                                const SearchQuery *q, int bm0, int bm1,
-                               int vis_c0, int vis_c1) {
+                               int vis_c0, int vis_c1, int cursor_col) {
     if (visible_len <= 0) return;
 
     unsigned char final_hl[visible_len];
@@ -169,6 +171,13 @@ static void render_row_content(AppendBuf *ab, const Row *row,
             memset(&final_hl[hl_s], HL_SEARCH, hl_e - hl_s);
             pos = mc + ml;
         }
+    }
+
+    /* Cursor cell: clear overlays so the terminal cursor can blink visibly. */
+    if (cursor_col >= 0) {
+        int idx = cursor_col - coloff;
+        if (idx >= 0 && idx < visible_len)
+            final_hl[idx] = row->hl ? row->hl[cursor_col] : HL_NORMAL;
     }
 
     unsigned char prev  = HL_NORMAL;
@@ -342,9 +351,14 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             }
 
             if (len > 0) {
-                if (hl_q || row->hl || bm0 != -1 || bm1 != -1 || vis_c0 != -1)
+                /* Pass cursor column only for the active pane's cursor row,
+                   so the terminal cursor cell is exempt from overlay colours. */
+                int cur_col = (vis_ar >= 0 /* active */ && filerow == pcy)
+                              ? pcx : -1;
+                if (hl_q || row->hl || bm0 != -1 || bm1 != -1 ||
+                    vis_c0 != -1 || cur_col != -1)
                     render_row_content(ab, row, pco, len, hl_q,
-                                       bm0, bm1, vis_c0, vis_c1);
+                                       bm0, bm1, vis_c0, vis_c1, cur_col);
                 else
                     ab_append(ab, &row->chars[pco], len);
             }
