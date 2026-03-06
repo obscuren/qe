@@ -3,6 +3,7 @@
 #include "editor.h"
 #include "lua_bridge.h"
 #include "search.h"
+#include "tree.h"
 #include "utils.h"
 
 #include <ctype.h>
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* ── Status message helpers ──────────────────────────────────────────── */
@@ -1246,6 +1248,9 @@ static void pane_save_cursor(void) {
 
 static void pane_activate(int idx) {
     pane_save_cursor();
+    /* Track the last content (non-tree) pane we're leaving. */
+    if (!E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree)
+        E.last_content_pane = E.cur_pane;
     int old_buf = E.panes[E.cur_pane].buf_idx;
     int new_buf = E.panes[idx].buf_idx;
     if (old_buf != new_buf) editor_buf_save(old_buf);
@@ -1344,6 +1349,213 @@ static void pane_navigate(int dir) {
     }
     if (best == -1) status_err("No window in that direction");
     else            pane_activate(best);
+}
+
+/* ── Tree helpers ────────────────────────────────────────────────────── */
+
+/* Forward declarations for helpers used by tree. */
+static void completion_free(void);
+static int  open_new_buf(const char *filename);
+
+static void tree_activate_entry(void) {
+    if (E.cy == 0) return;  /* root line — do nothing */
+    TreeState *ts = E.buftabs[E.cur_buftab].tree;
+    int entry_idx = E.cy - 1;  /* buf row 0 = root, row N+1 = entry N */
+    if (!ts || entry_idx < 0 || entry_idx >= ts->count) return;
+    TreeEntry *e = &ts->entries[entry_idx];
+
+    if (e->is_dir) {
+        tree_toggle(ts, entry_idx);
+        tree_render_to_buf(ts, &E.buf);
+        /* Clamp cursor in case rows were removed. */
+        if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+        if (E.cy < 0) E.cy = 0;
+    } else {
+        /* Find a content pane to open the file in. */
+        int cpane = E.last_content_pane;
+        if (cpane >= E.num_panes || E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+            cpane = -1;
+            for (int i = 0; i < E.num_panes; i++) {
+                if (!E.buftabs[E.panes[i].buf_idx].is_tree) { cpane = i; break; }
+            }
+        }
+        if (cpane < 0) { status_err("No content pane"); return; }
+
+        /* Activate the content pane, then open the file. */
+        pane_activate(cpane);
+        /* last_content_pane now set by pane_activate leaving tree pane */
+
+        char *fname = strdup(e->path);
+        /* Check if another pane also shows this buffer. */
+        int buf_shared = 0;
+        for (int i = 0; i < E.num_panes; i++) {
+            if (i != E.cur_pane && E.panes[i].buf_idx == E.cur_buftab)
+                { buf_shared = 1; break; }
+        }
+        if (buf_shared) {
+            if (open_new_buf(fname))
+                E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+        } else {
+            buf_free(&E.buf);
+            undo_stack_clear(&E.undo_stack);
+            undo_stack_clear(&E.redo_stack);
+            if (E.has_pre_insert) {
+                undo_state_free(&E.pre_insert_snapshot);
+                E.has_pre_insert = 0;
+            }
+            la_free();
+            E.cx = 0; E.cy = 0; E.rowoff = 0; E.coloff = 0;
+            buf_open(&E.buf, fname);
+            editor_detect_syntax();
+            status_msg("\"%s\"", E.buf.filename ? E.buf.filename : fname);
+        }
+        free(fname);
+    }
+}
+
+static void tree_handle_key(int c) {
+    TreeState *ts = E.buftabs[E.cur_buftab].tree;
+
+    switch (c) {
+        case ARROW_UP:
+        case 'k':
+            if (E.cy > 0) E.cy--;
+            break;
+        case ARROW_DOWN:
+        case 'j':
+            if (E.cy < E.buf.numrows - 1) E.cy++;
+            break;
+        case '\r':
+            tree_activate_entry();
+            break;
+        case 'I':   /* toggle hidden files */
+            if (ts) {
+                ts->show_hidden ^= 1;
+                tree_refresh(ts);
+                tree_render_to_buf(ts, &E.buf);
+                if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+            }
+            break;
+        case 'r':   /* refresh from disk */
+            if (ts) {
+                tree_refresh(ts);
+                tree_render_to_buf(ts, &E.buf);
+                if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+            }
+            break;
+        case 'q':
+        case '\x1b':
+            editor_open_tree();   /* toggle closed */
+            break;
+        default:
+            break;   /* silently ignore all other keys */
+    }
+}
+
+/* Open the file-tree sidebar (or close it if already open). */
+static void editor_open_tree_pane(void) {
+    /* Check if a tree pane is already open — toggle it closed. */
+    int tree_pane = -1;
+    for (int i = 0; i < E.num_panes; i++) {
+        if (E.buftabs[E.panes[i].buf_idx].is_tree) { tree_pane = i; break; }
+    }
+    if (tree_pane >= 0) {
+        /* If we're currently in the tree pane, move to the content pane first
+           so that pane_close gets the right donor and buffer. */
+        if (E.cur_pane == tree_pane) {
+            int cpane = E.last_content_pane;
+            if (cpane >= E.num_panes || E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+                for (int i = 0; i < E.num_panes; i++) {
+                    if (!E.buftabs[E.panes[i].buf_idx].is_tree) { cpane = i; break; }
+                }
+            }
+            if (cpane < E.num_panes)
+                pane_activate(cpane);
+            /* Refresh tree_pane index — pane_activate doesn't shift panes. */
+        }
+        pane_close(tree_pane);
+        E.screenrows = E.panes[E.cur_pane].height;
+        E.screencols = E.panes[E.cur_pane].width;
+        return;
+    }
+
+    /* Not open: create tree pane on the left side of the current pane. */
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
+    if (E.panes[E.cur_pane].width <= TREE_WIDTH + 5)
+        { status_err("Pane too narrow for tree"); return; }
+
+    int cp_idx    = E.cur_pane;
+    int cp_top    = E.panes[cp_idx].top;
+    int cp_left   = E.panes[cp_idx].left;
+    int cp_height = E.panes[cp_idx].height;
+    int cp_width  = E.panes[cp_idx].width;
+    int cp_buf    = E.panes[cp_idx].buf_idx;
+
+    E.last_content_pane = cp_idx;
+
+    /* Allocate a new buftab for the tree buffer. */
+    int tidx = E.num_buftabs++;
+    memset(&E.buftabs[tidx], 0, sizeof(BufTab));
+    E.buftabs[tidx].is_tree = 1;
+    E.buftabs[tidx].tree    = malloc(sizeof(TreeState));
+    if (!E.buftabs[tidx].tree) { E.num_buftabs--; status_err("Out of memory"); return; }
+    memset(E.buftabs[tidx].tree, 0, sizeof(TreeState));
+
+    TreeState *ts = E.buftabs[tidx].tree;
+    if (getcwd(ts->root, TREE_PATH_MAX) == NULL)
+        strncpy(ts->root, ".", TREE_PATH_MAX - 1);
+    ts->show_hidden = 0;
+
+    /* Populate the parked tree buffer (before it becomes live). */
+    buf_init(&E.buftabs[tidx].buf);
+    E.buftabs[tidx].buf.filename = strdup(ts->root);
+    tree_refresh(ts);
+    tree_render_to_buf(ts, &E.buftabs[tidx].buf);
+
+    /* Save the current live content buffer. */
+    pane_save_cursor();
+    editor_buf_save(cp_buf);
+    la_free();
+    insert_rec_reset();
+    completion_free();
+    E.pending_op = '\0';
+    E.count      = 0;
+
+    /* Insert tree pane at cp_idx; content pane shifts to cp_idx+1. */
+    for (int i = E.num_panes; i > cp_idx; i--) E.panes[i] = E.panes[i-1];
+    E.num_panes++;
+
+    /* Tree pane geometry. */
+    E.panes[cp_idx].top     = cp_top;
+    E.panes[cp_idx].left    = cp_left;
+    E.panes[cp_idx].height  = cp_height;
+    E.panes[cp_idx].width   = TREE_WIDTH;
+    E.panes[cp_idx].buf_idx = tidx;
+    E.panes[cp_idx].cx      = 0;
+    E.panes[cp_idx].cy      = 0;
+    E.panes[cp_idx].rowoff  = 0;
+    E.panes[cp_idx].coloff  = 0;
+
+    /* Content pane geometry (already shifted to cp_idx+1 by memmove above). */
+    E.panes[cp_idx + 1].left  = cp_left + TREE_WIDTH + 1;
+    E.panes[cp_idx + 1].width = cp_width - TREE_WIDTH - 1;
+
+    /* Activate tree pane (no buffer switch needed — we manage manually). */
+    E.cur_pane   = cp_idx;
+    E.cur_buftab = tidx;
+    E.screenrows = cp_height;
+    E.screencols = TREE_WIDTH;
+    E.cx = 0; E.cy = 0; E.rowoff = 0; E.coloff = 0;
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+
+    /* Load the tree buffer into live state. */
+    editor_buf_restore(tidx);
+}
+
+void editor_open_tree(void) {
+    editor_open_tree_pane();
 }
 
 /* ── Command execution ───────────────────────────────────────────────── */
@@ -1604,6 +1816,11 @@ void editor_execute_command(void) {
         }
         goto done;
 
+    /* ── :Tree ──────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "Tree") == 0 || strcmp(cmd, "tree") == 0) {
+        editor_open_tree_pane();
+        goto done;
+
     /* ── :close ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "close") == 0) {
         pane_save_cursor();
@@ -1815,7 +2032,28 @@ static void editor_process_normal(int c) {
         return;
     }
 
+    /* Pending leader key sequence. */
+    if (E.pending_leader) {
+        E.pending_leader = 0;
+        if (!lua_bridge_call_key(MODE_NORMAL, LEADER_BASE + c))
+            status_err("No mapping for <leader>%c", (char)c);
+        return;
+    }
+
+    /* Tree pane: route all keys to tree handler. */
+    if (E.buftabs[E.cur_buftab].is_tree) {
+        tree_handle_key(c);
+        return;
+    }
+
     if (lua_bridge_call_key(MODE_NORMAL, c)) return;
+
+    /* Leader key? Set pending and wait for the next key. */
+    if (c == (unsigned char)E.leader_char) {
+        E.count = 0;
+        E.pending_leader = 1;
+        return;
+    }
 
     /* Accumulate count prefix digits: 1-9 always; 0 only if count already started. */
     if ((c >= '1' && c <= '9') || (c == '0' && E.count > 0)) {

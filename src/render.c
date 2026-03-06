@@ -66,8 +66,13 @@ static void editor_scroll(void) {
 
 static const char *SPLASH[] = {
     "Quick Ed",
-    "Copyright (C) 2026 - Jeff",
-    "Licensed under GPL",
+    "",
+    "Version 0.1",
+    "By Jeff & Claude",
+    "Qe is open source and freely distributable",
+    "",
+    "Type  :q<Enter>             to exit",
+    "Type  :w <File>             to write"
 };
 #define SPLASH_LINES ((int)(sizeof(SPLASH) / sizeof(SPLASH[0])))
 
@@ -256,7 +261,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                            const SearchQuery *hl_q,
                            int vis_ar, int vis_ac,
                            int bm_valid, int bm_row, int bm_col) {
-    int gw           = gutter_width_for(buf);
+    int is_tree      = E.buftabs[p->buf_idx].is_tree;
+    int gw           = is_tree ? 0 : gutter_width_for(buf);
     int content_cols = p->width - gw;
 
     /* Cascade hl_open_comment for dirty rows. */
@@ -372,6 +378,24 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
             ab_append(ab, " ", 1);
             col += len + 1;
         }
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Tree pane: special compact status. */
+    if (E.buftabs[p->buf_idx].is_tree) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        char left[32], right[16];
+        int llen = snprintf(left,  sizeof(left),  " [Tree]");
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
         ab_append(ab, "\x1b[m", 3);
         return;
     }

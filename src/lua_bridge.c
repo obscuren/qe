@@ -56,6 +56,10 @@ static int l_set_option(lua_State *LS) {
     } else if (strcmp(name, "tabwidth") == 0) {
         int w = (int)luaL_checkinteger(LS, 2);
         if (w > 0) E.opts.tabwidth = w;
+    } else if (strcmp(name, "leader") == 0) {
+        const char *v = luaL_checkstring(LS, 2);
+        if (v[0] && !v[1]) E.leader_char = v[0];
+        else luaL_error(LS, "leader must be a single character");
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }
@@ -75,15 +79,26 @@ static int l_bind_key(lua_State *LS) {
     luaL_checktype(LS, 3, LUA_TFUNCTION);
 
     EditorMode mode;
-    if      (strcmp(mode_str, "n") == 0) mode = MODE_NORMAL;
-    else if (strcmp(mode_str, "i") == 0) mode = MODE_INSERT;
-    else if (strcmp(mode_str, "c") == 0) mode = MODE_COMMAND;
-    else if (strcmp(mode_str, "s") == 0) mode = MODE_SEARCH;
+    if      (strcmp(mode_str, "n")      == 0 ||
+             strcmp(mode_str, "normal") == 0) mode = MODE_NORMAL;
+    else if (strcmp(mode_str, "i")      == 0 ||
+             strcmp(mode_str, "insert") == 0) mode = MODE_INSERT;
+    else if (strcmp(mode_str, "c")      == 0 ||
+             strcmp(mode_str, "command")== 0) mode = MODE_COMMAND;
+    else if (strcmp(mode_str, "s")      == 0 ||
+             strcmp(mode_str, "search") == 0) mode = MODE_SEARCH;
     else return luaL_error(LS, "unknown mode: %s", mode_str);
 
-    if (strlen(key_str) != 1)
-        return luaL_error(LS, "key must be a single character: %s", key_str);
-    int key = (unsigned char)key_str[0];
+    size_t klen = strlen(key_str);
+    int key;
+    if (klen == 1) {
+        key = (unsigned char)key_str[0];
+    } else if (klen == 9 && memcmp(key_str, "<leader>", 8) == 0) {
+        key = LEADER_BASE + (unsigned char)key_str[8];
+    } else {
+        return luaL_error(LS, "key must be a single character or \"<leader>X\": %s",
+                          key_str);
+    }
 
     /* Replace existing binding for the same mode+key. */
     for (int i = 0; i < num_bindings; i++) {

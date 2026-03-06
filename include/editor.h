@@ -6,6 +6,7 @@
 #include "undo.h"
 #include "search.h"
 #include "syntax.h"
+#include "tree.h"
 
 #define MAX_BUFS  32
 #define MAX_PANES  8
@@ -28,6 +29,8 @@ typedef struct {
     int       pre_insert_dirty;
     int       has_pre_insert;
     const SyntaxDef *syntax;
+    int        is_tree;   /* 1 = this slot holds the file-tree buffer */
+    TreeState *tree;      /* non-NULL when is_tree == 1               */
 } BufTab;
 
 typedef enum {
@@ -143,6 +146,9 @@ typedef struct {
     int    cur_pane;          /* index of active pane              */
     int    pending_ctrlw;     /* 1 = waiting for Ctrl-W second key */
     int    pending_g;         /* 1 = waiting for g second key      */
+    int    pending_leader;    /* 1 = waiting for leader second key */
+    char   leader_char;       /* the leader key (default ' ')      */
+    int    last_content_pane; /* index of last non-tree active pane */
     int    mouse_x, mouse_y;  /* last mouse event terminal coords (1-based) */
     int    term_rows;         /* raw terminal height from ioctl    */
     int    term_cols;         /* raw terminal width  from ioctl    */

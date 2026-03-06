@@ -31,9 +31,13 @@ void editor_init(void) {
     E.screenrows = E.term_rows - 2;  /* status bar + command bar */
     E.screencols = E.term_cols;
 
-    E.num_panes     = 1;
-    E.cur_pane      = 0;
-    E.pending_ctrlw = 0;
+    E.num_panes        = 1;
+    E.cur_pane         = 0;
+    E.pending_ctrlw    = 0;
+    E.pending_g        = 0;
+    E.pending_leader   = 0;
+    E.leader_char      = ' ';
+    E.last_content_pane = 0;
     E.panes[0] = (Pane){ .top=1, .left=1,
                          .height=E.screenrows, .width=E.screencols,
                          .buf_idx=0 };

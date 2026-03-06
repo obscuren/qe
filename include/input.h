@@ -15,10 +15,12 @@ enum EditorKey {
     MOUSE_PRESS,
     MOUSE_SCROLL_UP,
     MOUSE_SCROLL_DOWN,
+    LEADER_BASE = 2000, /* leader sequences: LEADER_BASE + char */
 };
 
 int  editor_read_key(void);
 void editor_process_keypress(void);
 void editor_execute_command(void);
+void editor_open_tree(void);    /* open (or toggle) the file-tree sidebar */
 
 #endif

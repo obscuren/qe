@@ -6,6 +6,8 @@
 #include "lua_bridge.h"
 
 #include <signal.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static volatile int g_resized = 0;
 static void handle_sigwinch(int s) { (void)s; g_resized = 1; }
@@ -18,8 +20,14 @@ int main(int argc, char *argv[]) {
     signal(SIGWINCH, handle_sigwinch);
 
     if (argc >= 2) {
-        buf_open(&E.buf, argv[1]);
-        editor_detect_syntax();
+        struct stat st;
+        if (stat(argv[1], &st) == 0 && S_ISDIR(st.st_mode)) {
+            if (chdir(argv[1]) == 0)
+                editor_open_tree();
+        } else {
+            buf_open(&E.buf, argv[1]);
+            editor_detect_syntax();
+        }
     }
 
     while (1) {
