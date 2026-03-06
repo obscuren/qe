@@ -1443,6 +1443,11 @@ static void tree_handle_key(int c) {
                 if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
             }
             break;
+        case ':':
+            E.mode = MODE_COMMAND;
+            E.cmdbuf[0] = '\0';
+            E.cmdlen    = 0;
+            break;
         case 'q':
         case '\x1b':
             editor_open_tree();   /* toggle closed */
@@ -1613,8 +1618,15 @@ static int close_cur_buf(int force) {
         status_err("Unsaved changes (use :q! to override)");
         return 0;
     }
-    if (E.num_buftabs == 1)
-        return 1;   /* last buffer — tell caller to quit */
+
+    /* Count non-tree content buffers that would remain after this close. */
+    int remaining = 0;
+    for (int i = 0; i < E.num_buftabs; i++) {
+        if (i != E.cur_buftab && !E.buftabs[i].is_tree)
+            remaining++;
+    }
+    if (remaining == 0)
+        return 1;   /* last content buffer — tell caller to quit */
 
     /* Free current live resources. */
     buf_free(&E.buf);
@@ -1637,8 +1649,28 @@ static int close_cur_buf(int force) {
     memset(&E.buftabs[E.num_buftabs - 1], 0, sizeof(BufTab));
     E.num_buftabs--;
 
-    int next = (cur < E.num_buftabs) ? cur : E.num_buftabs - 1;
+    /* Update all pane buf_idx values after the shift. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (E.panes[i].buf_idx > cur)
+            E.panes[i].buf_idx--;
+        else if (E.panes[i].buf_idx == cur)
+            E.panes[i].buf_idx = -1;   /* will be fixed to next below */
+    }
+
+    /* Pick next non-tree buffer (prefer forward, then backward). */
+    int next = -1;
+    for (int i = cur; i < E.num_buftabs && next < 0; i++)
+        if (!E.buftabs[i].is_tree) next = i;
+    for (int i = cur - 1; i >= 0 && next < 0; i--)
+        if (!E.buftabs[i].is_tree) next = i;
+    if (next < 0) next = (cur < E.num_buftabs) ? cur : E.num_buftabs - 1;
+
+    /* Redirect any panes that were showing the closed buffer. */
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.panes[i].buf_idx == -1) E.panes[i].buf_idx = next;
+
     E.cur_buftab = next;
+    E.panes[E.cur_pane].buf_idx = next;
     editor_buf_restore(next);
     E.mode = MODE_NORMAL;
     return 0;
@@ -1660,6 +1692,12 @@ void editor_execute_command(void) {
         const char *arg = (*p == ' ' && p[1]) ? p + 1 : NULL;
 
         if ((dw || dq) && (*p == '\0' || arg)) {
+
+            /* Tree pane is read-only; :q from tree closes the sidebar. */
+            if (E.buftabs[E.cur_buftab].is_tree) {
+                if (dw) { status_err("Tree pane is read-only"); goto done; }
+                if (dq) { editor_open_tree_pane(); goto done; }
+            }
 
             /* ── write ─────────────────────────────────────────────── */
             if (dw) {
@@ -1897,17 +1935,29 @@ void editor_execute_command(void) {
 
     /* ── :bn / :bp / :b N ──────────────────────────────────────────── */
     } else if (strcmp(cmd, "bn") == 0) {
-        switch_to_buf((E.cur_buftab + 1) % E.num_buftabs);
-        status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs);
+        int next = -1;
+        for (int i = 1; i <= E.num_buftabs && next < 0; i++) {
+            int idx = (E.cur_buftab + i) % E.num_buftabs;
+            if (!E.buftabs[idx].is_tree) next = idx;
+        }
+        if (next < 0) status_err("No other buffer");
+        else { switch_to_buf(next); status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs); }
 
     } else if (strcmp(cmd, "bp") == 0) {
-        switch_to_buf((E.cur_buftab - 1 + E.num_buftabs) % E.num_buftabs);
-        status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs);
+        int next = -1;
+        for (int i = 1; i <= E.num_buftabs && next < 0; i++) {
+            int idx = (E.cur_buftab - i + E.num_buftabs) % E.num_buftabs;
+            if (!E.buftabs[idx].is_tree) next = idx;
+        }
+        if (next < 0) status_err("No other buffer");
+        else { switch_to_buf(next); status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs); }
 
     } else if (cmd[0] == 'b' && cmd[1] == ' ' && cmd[2] >= '1') {
         int n = atoi(cmd + 2) - 1;
         if (n < 0 || n >= E.num_buftabs)
             status_err("No buffer %d", n + 1);
+        else if (E.buftabs[n].is_tree)
+            status_err("Not a content buffer");
         else {
             switch_to_buf(n);
             status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs);
@@ -1918,6 +1968,7 @@ void editor_execute_command(void) {
         char msg[128];
         int pos = 0;
         for (int i = 0; i < E.num_buftabs && pos < (int)sizeof(msg) - 1; i++) {
+            if (E.buftabs[i].is_tree) continue;   /* tree buffers not listed */
             const char *fn = (i == E.cur_buftab)
                 ? (E.buf.filename          ? E.buf.filename          : "[No Name]")
                 : (E.buftabs[i].buf.filename ? E.buftabs[i].buf.filename : "[No Name]");
