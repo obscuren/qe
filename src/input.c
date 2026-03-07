@@ -1477,6 +1477,20 @@ static void tree_handle_key(int c) {
                 if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
             }
             break;
+        case 'a':   /* git add file/dir under cursor */
+            if (ts) {
+                int eidx = E.cy - 1;  /* row 0 = root, row i+1 = entries[i] */
+                if (eidx >= 0 && eidx < ts->count) {
+                    if (git_add(ts->entries[eidx].path)) {
+                        status_msg("Staged: %s", ts->entries[eidx].name);
+                        tree_update_git_status(ts);
+                        tree_render_to_buf(ts, &E.buf);
+                    } else {
+                        status_err("git add failed");
+                    }
+                }
+            }
+            break;
         case ':':
             E.mode = MODE_COMMAND;
             E.cmdbuf[0] = '\0';
@@ -3060,6 +3074,19 @@ void editor_execute_command(void) {
         goto done;
     } else if (strcmp(cmd, "Grevert") == 0 || strcmp(cmd, "grevert") == 0) {
         hunk_revert();
+        goto done;
+
+    /* ── :Gadd [file] ─────────────────────────────────────────────── */
+    } else if (strncmp(cmd, "Gadd", 4) == 0 || strncmp(cmd, "gadd", 4) == 0) {
+        const char *file = cmd + 4;
+        while (*file == ' ') file++;
+        if (!*file) file = E.buf.filename;
+        if (!file) { status_err("No filename"); goto done; }
+        if (git_add(file))
+            status_msg("Staged: %s", file);
+        else
+            status_err("git add failed: %s", file);
+        editor_update_git_signs();
         goto done;
 
     /* ── :Gcommit ──────────────────────────────────────────────────── */

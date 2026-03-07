@@ -265,6 +265,15 @@ void git_diff_signs_both(const char *filename,
 
 /* ── Commit ──────────────────────────────────────────────────────────── */
 
+int git_add(const char *filename) {
+    if (!filename) return 0;
+    char qfile[1024];
+    shell_quote(filename, qfile, sizeof(qfile));
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "git add %s 2>/dev/null", qfile);
+    return (system(cmd) == 0) ? 1 : 0;
+}
+
 int git_commit(const char *message, char *output, int outlen) {
     if (!message || !*message) return 0;
 

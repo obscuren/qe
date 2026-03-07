@@ -393,6 +393,15 @@ Signs update automatically after saving, undoing, or leaving insert mode.
 
 Also available as `:Gstage` and `:Grevert`.
 
+### Staging files
+
+| Command          | Action                                    |
+|------------------|-------------------------------------------|
+| `:Gadd`          | Stage the current file                    |
+| `:Gadd path`     | Stage a specific file or directory        |
+
+In the file tree, press `a` on any entry to stage it. The tree colors update immediately.
+
 ### Branch name
 
 The current git branch (or short SHA for detached HEAD) is shown in the status bar.
