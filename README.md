@@ -177,7 +177,21 @@ All motions also work after operators: `df,` deletes to the next comma, `ct"` ch
 
 Word motions (`w`, `e`, `b`) cross line boundaries, so `d2w` near the end of a line deletes through the newline into the next line. Yanked multi-line text can be pasted back with `p`.
 
-Deleted or yanked text goes into the internal register and can be pasted with `p` / `P`.
+Deleted or yanked text goes into the unnamed register and can be pasted with `p` / `P`.
+
+### Named registers
+
+Prefix any yank, delete, or paste with `"a` through `"z` to use a named register:
+
+| Sequence   | Action                                      |
+|------------|---------------------------------------------|
+| `"ayy`     | Yank current line into register `a`         |
+| `"ap`      | Paste from register `a`                     |
+| `"bdd`     | Delete line into register `b`               |
+| `"cy$`     | Yank to end of line into register `c`       |
+
+All yank/delete operations also write to the unnamed register, so `p` always pastes the most recently yanked/deleted text regardless of which named register was used. The active register is shown in the status bar.
+
 `c` operations are a single undo step — pressing `u` restores the text before the change.
 
 ## Text objects

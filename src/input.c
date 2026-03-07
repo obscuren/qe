@@ -327,52 +327,78 @@ static int pos_find_char(int *r, int *c, char key, char target, int n) {
     return 0;
 }
 
-/* ── Yank register ───────────────────────────────────────────────────── */
+/* ── Yank registers ──────────────────────────────────────────────────── */
 
-static void yank_free(void) {
-    for (int i = 0; i < E.yank_numrows; i++) free(E.yank_rows[i]);
-    free(E.yank_rows);
-    E.yank_rows    = NULL;
-    E.yank_numrows = 0;
+/* Consume pending_reg and return the target register index (0 = unnamed). */
+static int reg_consume(void) {
+    int r = E.pending_reg;
+    E.pending_reg = -1;
+    return (r >= 1 && r <= 26) ? r : 0;
+}
+
+/* Free a single register. */
+static void reg_free(int ri) {
+    for (int i = 0; i < E.regs[ri].numrows; i++) free(E.regs[ri].rows[i]);
+    free(E.regs[ri].rows);
+    E.regs[ri].rows    = NULL;
+    E.regs[ri].numrows = 0;
+}
+
+/* Copy register src into dst (deep copy). */
+static void reg_copy(int dst, int src) {
+    reg_free(dst);
+    E.regs[dst].linewise = E.regs[src].linewise;
+    E.regs[dst].numrows  = E.regs[src].numrows;
+    E.regs[dst].rows     = malloc(sizeof(char *) * E.regs[src].numrows);
+    for (int i = 0; i < E.regs[src].numrows; i++)
+        E.regs[dst].rows[i] = strdup(E.regs[src].rows[i]);
+}
+
+/* Write to a register + always mirror into unnamed (reg 0). */
+static void reg_write(int ri, int linewise, char **rows, int numrows) {
+    reg_free(ri);
+    E.regs[ri].linewise = linewise;
+    E.regs[ri].numrows  = numrows;
+    E.regs[ri].rows     = rows;
+    if (ri != 0) reg_copy(0, ri);
 }
 
 static void yank_set_lines(int r0, int r1) {
-    yank_free();
-    E.yank_linewise = 1;
-    E.yank_numrows  = r1 - r0 + 1;
-    E.yank_rows     = malloc(sizeof(char *) * E.yank_numrows);
-    for (int i = 0; i < E.yank_numrows; i++)
-        E.yank_rows[i] = strdup(E.buf.rows[r0 + i].chars);
+    int ri = reg_consume();
+    int n  = r1 - r0 + 1;
+    char **rows = malloc(sizeof(char *) * n);
+    for (int i = 0; i < n; i++)
+        rows[i] = strdup(E.buf.rows[r0 + i].chars);
+    reg_write(ri, 1, rows, n);
 }
 
 static void yank_set_chars(int row, int c0, int c1) {
-    yank_free();
-    E.yank_linewise = 0;
-    E.yank_numrows  = 1;
-    E.yank_rows     = malloc(sizeof(char *));
-    int len         = c1 - c0;
-    E.yank_rows[0]  = malloc(len + 1);
-    memcpy(E.yank_rows[0], E.buf.rows[row].chars + c0, len);
-    E.yank_rows[0][len] = '\0';
+    int ri  = reg_consume();
+    int len = c1 - c0;
+    char **rows = malloc(sizeof(char *));
+    rows[0] = malloc(len + 1);
+    memcpy(rows[0], E.buf.rows[row].chars + c0, len);
+    rows[0][len] = '\0';
+    reg_write(ri, 0, rows, 1);
 }
 
 /* Charwise yank spanning multiple rows: row sr cols [sc..end),
    full rows sr+1..er-1, row er cols [0..ec). */
 static void yank_set_multiline_chars(int sr, int sc, int er, int ec) {
-    yank_free();
-    E.yank_linewise = 0;
-    E.yank_numrows  = er - sr + 1;
-    E.yank_rows     = malloc(sizeof(char *) * E.yank_numrows);
-    for (int i = 0; i < E.yank_numrows; i++) {
+    int ri = reg_consume();
+    int n  = er - sr + 1;
+    char **rows = malloc(sizeof(char *) * n);
+    for (int i = 0; i < n; i++) {
         int r   = sr + i;
         int len = E.buf.rows[r].len;
-        int c0  = (i == 0)                  ? sc : 0;
-        int c1  = (i == E.yank_numrows - 1) ? (ec < len ? ec : len) : len;
+        int c0  = (i == 0)       ? sc : 0;
+        int c1  = (i == n - 1)   ? (ec < len ? ec : len) : len;
         int seg = c1 - c0; if (seg < 0) seg = 0;
-        E.yank_rows[i] = malloc(seg + 1);
-        if (seg > 0) memcpy(E.yank_rows[i], E.buf.rows[r].chars + c0, seg);
-        E.yank_rows[i][seg] = '\0';
+        rows[i] = malloc(seg + 1);
+        if (seg > 0) memcpy(rows[i], E.buf.rows[r].chars + c0, seg);
+        rows[i][seg] = '\0';
     }
+    reg_write(ri, 0, rows, n);
 }
 
 static void editor_close_bracket(char c);  /* forward declaration */
@@ -894,16 +920,19 @@ static void editor_apply_op(char op, int motion_key, int n) {
     }
 }
 
-/* Paste the yank register. before=1 pastes before cursor/line, 0 = after. */
+/* Paste from a register. before=1 pastes before cursor/line, 0 = after. */
 static void editor_paste(int before) {
-    if (!E.yank_rows || E.yank_numrows == 0) return;
+    int ri = reg_consume();
+    if (!E.regs[ri].rows || E.regs[ri].numrows == 0) return;
     push_undo();
 
-    if (E.yank_linewise) {
+    char **yr = E.regs[ri].rows;
+    int    yn = E.regs[ri].numrows;
+
+    if (E.regs[ri].linewise) {
         int at = before ? E.cy : E.cy + 1;
-        for (int i = 0; i < E.yank_numrows; i++)
-            buf_insert_row(&E.buf, at + i,
-                           E.yank_rows[i], (int)strlen(E.yank_rows[i]));
+        for (int i = 0; i < yn; i++)
+            buf_insert_row(&E.buf, at + i, yr[i], (int)strlen(yr[i]));
         E.cy = at;
         E.cx = 0;
     } else {
@@ -912,9 +941,8 @@ static void editor_paste(int before) {
         Row *row = &E.buf.rows[E.cy];
         int  ins = before ? E.cx : (E.cx < row->len ? E.cx + 1 : row->len);
 
-        if (E.yank_numrows == 1) {
-            /* Single-row charwise paste. */
-            const char *text = E.yank_rows[0];
+        if (yn == 1) {
+            const char *text = yr[0];
             int         tlen = (int)strlen(text);
             for (int i = tlen - 1; i >= 0; i--)
                 buf_row_insert_char(row, ins, text[i]);
@@ -923,33 +951,24 @@ static void editor_paste(int before) {
             E.cx = ins + tlen - 1;
             if (E.cx < 0) E.cx = 0;
         } else {
-            /* Multi-row charwise paste.
-               Splits current row at `ins`:
-                 row[0..ins) + yank_rows[0]     → stays on current row
-                 yank_rows[1..n-2]              → new rows
-                 yank_rows[n-1] + row[ins..end) → final new row       */
             int   tail_len = row->len - ins;
             char *tail     = malloc(tail_len + 1);
             memcpy(tail, row->chars + ins, tail_len);
             tail[tail_len] = '\0';
 
-            /* Truncate current row at ins, then append first yank row. */
-            row->len      = ins;
+            row->len        = ins;
             row->chars[ins] = '\0';
-            const char *first = E.yank_rows[0];
+            const char *first = yr[0];
             int          flen = (int)strlen(first);
             for (int i = flen - 1; i >= 0; i--)
                 buf_row_insert_char(&E.buf.rows[E.cy], ins, first[i]);
 
-            /* Insert intermediate yank rows. */
-            for (int i = 1; i < E.yank_numrows - 1; i++)
-                buf_insert_row(&E.buf, E.cy + i,
-                               E.yank_rows[i], (int)strlen(E.yank_rows[i]));
+            for (int i = 1; i < yn - 1; i++)
+                buf_insert_row(&E.buf, E.cy + i, yr[i], (int)strlen(yr[i]));
 
-            /* Last yank row + original tail become a new row. */
-            const char *last = E.yank_rows[E.yank_numrows - 1];
+            const char *last = yr[yn - 1];
             int          llen = (int)strlen(last);
-            int       new_row = E.cy + E.yank_numrows - 1;
+            int       new_row = E.cy + yn - 1;
             char    *combined = malloc(llen + tail_len + 1);
             memcpy(combined,        last, llen);
             memcpy(combined + llen, tail, tail_len);
@@ -1059,6 +1078,14 @@ static void visual_op_change(void) {
 
 static void editor_process_visual(int c) {
     if (lua_bridge_call_key(E.mode, c)) return;
+
+    /* Register prefix in visual mode. */
+    if (c == '"') {
+        int r = editor_read_key();
+        if (r >= 'a' && r <= 'z')
+            E.pending_reg = r - 'a' + 1;
+        return;
+    }
 
     switch (c) {
         case '\x1b':
@@ -3906,6 +3933,19 @@ static void editor_process_normal(int c) {
         return;
     }
 
+    /* Register prefix: "a selects register a for the next yank/delete/paste.
+       Reads the register name inline, sets pending_reg, then re-enters this
+       function with the following key so it's processed in the same context. */
+    if (c == '"') {
+        int r = editor_read_key();
+        if (r >= 'a' && r <= 'z') {
+            E.pending_reg = r - 'a' + 1;
+            int next = editor_read_key();
+            editor_process_normal(next);
+        }
+        return;
+    }
+
     /* If an operator is pending, this key is the motion. */
     if (E.pending_op) {
         char op      = E.pending_op;
@@ -4009,9 +4049,10 @@ static void editor_process_normal(int c) {
             if (E.cy < E.buf.numrows) {
                 Row *row = &E.buf.rows[E.cy];
                 if (E.cx < row->len) {
-                    push_undo();
                     int del = n;
                     if (E.cx + del > row->len) del = row->len - E.cx;
+                    yank_set_chars(E.cy, E.cx, E.cx + del);
+                    push_undo();
                     for (int i = 0; i < del; i++)
                         buf_row_delete_char(row, E.cx);
                     E.buf.dirty++;

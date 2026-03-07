@@ -76,9 +76,8 @@ void editor_init(void) {
     E.insert_count         = 1;
     E.is_replaying         = 0;
 
-    E.yank_rows     = NULL;
-    E.yank_numrows  = 0;
-    E.yank_linewise = 0;
+    memset(E.regs, 0, sizeof(E.regs));
+    E.pending_reg = -1;
 
     E.completion_matches = NULL;
     E.completion_count   = 0;

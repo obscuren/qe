@@ -891,13 +891,18 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
             snprintf(branch, sizeof(branch), "  %s", E.git_branch);
         llen = snprintf(left, sizeof(left), " %.30s%s%s%s",
                         name, buf->dirty ? " [+]" : "", bufnum, branch);
-        char prefix[16] = "";
+        char prefix[24] = "";
+        char regstr[6]  = "";
+        if (E.pending_reg >= 1 && E.pending_reg <= 26)
+            snprintf(regstr, sizeof(regstr), "\"%c", 'a' + E.pending_reg - 1);
         if (E.count > 0 && E.pending_op)
-            snprintf(prefix, sizeof(prefix), "%d%c", E.count, E.pending_op);
+            snprintf(prefix, sizeof(prefix), "%s%d%c", regstr, E.count, E.pending_op);
         else if (E.count > 0)
-            snprintf(prefix, sizeof(prefix), "%d", E.count);
+            snprintf(prefix, sizeof(prefix), "%s%d", regstr, E.count);
         else if (E.pending_op)
-            snprintf(prefix, sizeof(prefix), "%c", E.pending_op);
+            snprintf(prefix, sizeof(prefix), "%s%c", regstr, E.pending_op);
+        else if (regstr[0])
+            snprintf(prefix, sizeof(prefix), "%s", regstr);
 
         char pos[16];
         if (buf->numrows <= 1 || pcy == 0)
