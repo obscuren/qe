@@ -40,6 +40,10 @@ typedef struct {
     TreeState *tree;      /* non-NULL when is_tree == 1               */
     int        is_qf;     /* 1 = this slot holds the quickfix buffer  */
     QfList    *qf;        /* non-NULL when is_qf == 1                 */
+    int        is_blame;  /* 1 = this slot holds a git blame buffer   */
+    int        blame_source_buf; /* buf_idx of the source file (scroll sync) */
+    int        is_diff;   /* 1 = this slot holds a HEAD diff buffer   */
+    int        diff_source_buf;  /* buf_idx of the working file (scroll sync) */
 } BufTab;
 
 typedef enum {

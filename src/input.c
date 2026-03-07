@@ -1638,6 +1638,364 @@ void editor_open_fuzzy(void) {
     fuzzy_open();
 }
 
+/* ── Blame pane ──────────────────────────────────────────────────────── */
+
+#define BLAME_WIDTH 40
+
+static int blame_pane_idx(void) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].is_blame) return i;
+    return -1;
+}
+
+static void blame_close(void) {
+    int bpi = blame_pane_idx();
+    if (bpi < 0) return;
+
+    Pane *bp = &E.panes[bpi];
+    int buf_idx = bp->buf_idx;
+    int blame_left  = bp->left;
+    int blame_width = bp->width;
+
+    /* Find content pane to the right and expand it. */
+    int cpane = -1;
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i != bpi && E.panes[i].left == blame_left + blame_width + 1) {
+            cpane = i; break;
+        }
+    }
+    if (cpane >= 0) {
+        E.panes[cpane].left   = blame_left;
+        E.panes[cpane].width += blame_width + 1;
+    }
+
+    /* Free blame buffer. */
+    if (E.cur_pane == bpi) {
+        for (int i = 0; i < E.buf.numrows; i++) {
+            free(E.buf.rows[i].chars);
+            free(E.buf.rows[i].hl);
+        }
+        free(E.buf.rows);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+    } else {
+        pane_save_cursor();
+        buf_free(&E.buftabs[buf_idx].buf);
+    }
+    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+
+    /* Remove blame pane. */
+    for (int i = bpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
+    E.num_panes--;
+    if (cpane > bpi) cpane--;
+
+    /* Activate the content pane. */
+    if (cpane >= 0) {
+        int donor_buf = E.panes[cpane].buf_idx;
+        if (E.cur_buftab != donor_buf) {
+            editor_buf_restore(donor_buf);
+            E.cur_buftab = donor_buf;
+        }
+        E.cur_pane   = cpane;
+        E.screenrows = E.panes[cpane].height;
+        E.screencols = E.panes[cpane].width;
+        E.cx     = E.panes[cpane].cx;
+        E.cy     = E.panes[cpane].cy;
+        E.rowoff = E.panes[cpane].rowoff;
+        E.coloff = E.panes[cpane].coloff;
+    }
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+}
+
+static void blame_open(void) {
+    /* Toggle off if already open. */
+    if (blame_pane_idx() >= 0) { blame_close(); return; }
+
+    if (!E.buf.filename) { status_err("No filename"); return; }
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
+
+    /* Run git blame. */
+    int blame_count = 0;
+    char **blame_lines = git_blame(E.buf.filename, &blame_count);
+    if (!blame_lines || blame_count == 0) {
+        status_err("git blame failed (file committed?)");
+        return;
+    }
+
+    /* Determine blame pane width (capped to available space). */
+    int bw = BLAME_WIDTH;
+    Pane *sp = &E.panes[E.cur_pane];
+    if (sp->width < bw + 15) { /* need room for source pane */
+        for (int i = 0; i < blame_count; i++) free(blame_lines[i]);
+        free(blame_lines);
+        status_err("Pane too narrow for blame");
+        return;
+    }
+
+    /* Allocate blame buftab. */
+    int bidx = E.num_buftabs++;
+    memset(&E.buftabs[bidx], 0, sizeof(BufTab));
+    E.buftabs[bidx].is_blame = 1;
+    E.buftabs[bidx].blame_source_buf = E.cur_buftab;
+    buf_init(&E.buftabs[bidx].buf);
+
+    /* Populate blame buffer rows. */
+    for (int i = 0; i < blame_count; i++) {
+        int len = (int)strlen(blame_lines[i]);
+        buf_insert_row(&E.buftabs[bidx].buf, i, blame_lines[i], len);
+        free(blame_lines[i]);
+    }
+    free(blame_lines);
+    E.buftabs[bidx].buf.dirty = 0;
+
+    /* Shrink source pane and insert blame pane to its left. */
+    int src_idx = E.cur_pane;
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+
+    sp = &E.panes[src_idx];  /* re-fetch after potential pane_save_cursor */
+    int old_left = sp->left;
+    sp->left  = old_left + bw + 1;
+    sp->width -= (bw + 1);
+
+    /* Insert blame pane before the source pane. */
+    for (int i = E.num_panes; i > src_idx; i--) E.panes[i] = E.panes[i - 1];
+    E.num_panes++;
+    src_idx++;  /* source pane shifted right */
+
+    Pane *bp = &E.panes[src_idx - 1];
+    bp->top     = E.panes[src_idx].top;
+    bp->left    = old_left;
+    bp->height  = E.panes[src_idx].height;
+    bp->width   = bw;
+    bp->buf_idx = bidx;
+    bp->cx      = 0;
+    bp->cy      = E.cy;       /* start at same line as source */
+    bp->rowoff  = E.rowoff;
+    bp->coloff  = 0;
+
+    /* Keep focus on source pane. */
+    E.cur_pane   = src_idx;
+    E.screenrows = E.panes[src_idx].height;
+    E.screencols = E.panes[src_idx].width;
+    E.cur_buftab = E.panes[src_idx].buf_idx;
+    editor_buf_restore(E.cur_buftab);
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+
+    /* Update last_content_pane since indices shifted. */
+    if (E.last_content_pane >= src_idx - 1) E.last_content_pane++;
+}
+
+static void blame_handle_key(int c) {
+    if (c == 'q' || c == '\x1b') { blame_close(); return; }
+
+    int bpi = blame_pane_idx();
+    if (bpi < 0) return;
+    int src_buf = E.buftabs[E.panes[bpi].buf_idx].blame_source_buf;
+
+    if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
+        E.cy++;
+        if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    } else if ((c == ARROW_UP || c == 'k') && E.cy > 0) {
+        E.cy--;
+        if (E.cy < E.rowoff) E.rowoff = E.cy;
+    }
+
+    /* Sync scroll to source pane. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (E.panes[i].buf_idx == src_buf) {
+            E.panes[i].cy     = E.cy;
+            E.panes[i].rowoff = E.rowoff;
+            break;
+        }
+    }
+}
+
+/* ── Diff pane (HEAD vs working copy) ────────────────────────────────── */
+
+static int diff_pane_idx(void) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].is_diff) return i;
+    return -1;
+}
+
+static void diff_close(void) {
+    int dpi = diff_pane_idx();
+    if (dpi < 0) return;
+
+    Pane *dp = &E.panes[dpi];
+    int buf_idx = dp->buf_idx;
+    int diff_left  = dp->left;
+    int diff_width = dp->width;
+
+    /* Find the source pane to the right and expand it. */
+    int cpane = -1;
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i != dpi && E.panes[i].left == diff_left + diff_width + 1) {
+            cpane = i; break;
+        }
+    }
+    if (cpane >= 0) {
+        E.panes[cpane].left   = diff_left;
+        E.panes[cpane].width += diff_width + 1;
+    }
+
+    /* Free diff buffer. */
+    if (E.cur_pane == dpi) {
+        for (int i = 0; i < E.buf.numrows; i++) {
+            free(E.buf.rows[i].chars);
+            free(E.buf.rows[i].hl);
+        }
+        free(E.buf.rows);
+        free(E.buf.git_signs);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+    } else {
+        buf_free(&E.buftabs[buf_idx].buf);
+    }
+    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+
+    /* Remove diff pane. */
+    for (int i = dpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
+    E.num_panes--;
+    if (cpane > dpi) cpane--;
+
+    /* Activate the source pane. */
+    if (cpane >= 0) {
+        int donor_buf = E.panes[cpane].buf_idx;
+        if (E.cur_buftab != donor_buf) {
+            editor_buf_restore(donor_buf);
+            E.cur_buftab = donor_buf;
+        }
+        E.cur_pane   = cpane;
+        E.screenrows = E.panes[cpane].height;
+        E.screencols = E.panes[cpane].width;
+        E.cx     = E.panes[cpane].cx;
+        E.cy     = E.panes[cpane].cy;
+        E.rowoff = E.panes[cpane].rowoff;
+        E.coloff = E.panes[cpane].coloff;
+    }
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+}
+
+static void diff_open(void) {
+    /* Toggle off if already open. */
+    if (diff_pane_idx() >= 0) { diff_close(); return; }
+
+    if (!E.buf.filename) { status_err("No filename"); return; }
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
+
+    /* Get HEAD version. */
+    int head_count = 0;
+    char **head_lines = git_show_head(E.buf.filename, &head_count);
+    if (!head_lines || head_count == 0) {
+        status_err("git show HEAD failed (file committed?)");
+        return;
+    }
+
+    /* Need room for two panes. */
+    Pane *sp = &E.panes[E.cur_pane];
+    if (sp->width < 30) {
+        for (int i = 0; i < head_count; i++) free(head_lines[i]);
+        free(head_lines);
+        status_err("Pane too narrow for diff");
+        return;
+    }
+
+    /* Allocate diff buftab. */
+    int didx = E.num_buftabs++;
+    memset(&E.buftabs[didx], 0, sizeof(BufTab));
+    E.buftabs[didx].is_diff = 1;
+    E.buftabs[didx].diff_source_buf = E.cur_buftab;
+    E.buftabs[didx].syntax = syntax_detect(E.buf.filename);
+    buf_init(&E.buftabs[didx].buf);
+
+    /* Populate diff buffer rows. */
+    for (int i = 0; i < head_count; i++) {
+        int len = (int)strlen(head_lines[i]);
+        buf_insert_row(&E.buftabs[didx].buf, i, head_lines[i], len);
+        free(head_lines[i]);
+    }
+    free(head_lines);
+    E.buftabs[didx].buf.dirty = 0;
+    /* Copy filename so gutter git signs and syntax work. */
+    E.buftabs[didx].buf.filename = strdup(E.buf.filename);
+
+    /* Compute diff signs for both sides (background highlighting). */
+    {
+        const char **nc = malloc(sizeof(char *) * E.buf.numrows);
+        int *nl = malloc(sizeof(int) * E.buf.numrows);
+        const char **oc = malloc(sizeof(char *) * head_count);
+        int *ol = malloc(sizeof(int) * head_count);
+        Buffer *hbuf = &E.buftabs[didx].buf;
+        if (nc && nl && oc && ol) {
+            for (int i = 0; i < E.buf.numrows; i++) {
+                nc[i] = E.buf.rows[i].chars;
+                nl[i] = E.buf.rows[i].len;
+            }
+            for (int i = 0; i < hbuf->numrows; i++) {
+                oc[i] = hbuf->rows[i].chars;
+                ol[i] = hbuf->rows[i].len;
+            }
+            char *ns = NULL, *os = NULL;
+            git_diff_signs_both(E.buf.filename, nc, nl, E.buf.numrows,
+                                oc, ol, hbuf->numrows, &ns, &os);
+            free(E.buf.git_signs);
+            E.buf.git_signs = ns;
+            E.buf.git_signs_count = ns ? E.buf.numrows : 0;
+            free(hbuf->git_signs);
+            hbuf->git_signs = os;
+            hbuf->git_signs_count = os ? hbuf->numrows : 0;
+        }
+        free(nc); free(nl); free(oc); free(ol);
+    }
+
+    /* Split: left = HEAD (diff), right = working copy. */
+    int src_idx = E.cur_pane;
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+
+    sp = &E.panes[src_idx];
+    int old_left  = sp->left;
+    int old_width = sp->width;
+    int half = old_width / 2;
+
+    sp->left  = old_left + half + 1;
+    sp->width = old_width - half - 1;
+
+    /* Insert diff pane before the source pane. */
+    for (int i = E.num_panes; i > src_idx; i--) E.panes[i] = E.panes[i - 1];
+    E.num_panes++;
+    src_idx++;  /* source pane shifted right */
+
+    Pane *dp = &E.panes[src_idx - 1];
+    dp->top     = E.panes[src_idx].top;
+    dp->left    = old_left;
+    dp->height  = E.panes[src_idx].height;
+    dp->width   = half;
+    dp->buf_idx = didx;
+    dp->cx      = 0;
+    dp->cy      = E.cy;
+    dp->rowoff  = E.rowoff;
+    dp->coloff  = 0;
+
+    /* Keep focus on source (working copy) pane. */
+    E.cur_pane   = src_idx;
+    E.screenrows = E.panes[src_idx].height;
+    E.screencols = E.panes[src_idx].width;
+    E.cur_buftab = E.panes[src_idx].buf_idx;
+    editor_buf_restore(E.cur_buftab);
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+
+    if (E.last_content_pane >= src_idx - 1) E.last_content_pane++;
+}
+
 /* ── Quickfix pane ───────────────────────────────────────────────────── */
 
 static int qf_pane_idx(void) {
@@ -2410,6 +2768,16 @@ void editor_execute_command(void) {
         editor_open_tree_pane();
         goto done;
 
+    /* ── :Gdiff ─────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "Gdiff") == 0 || strcmp(cmd, "gdiff") == 0) {
+        diff_open();
+        goto done;
+
+    /* ── :Gblame ────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "Gblame") == 0 || strcmp(cmd, "gblame") == 0) {
+        blame_open();
+        goto done;
+
     /* ── :Fuzzy ─────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "Fuzzy") == 0 || strcmp(cmd, "fuzzy") == 0) {
         fuzzy_open();
@@ -2866,6 +3234,38 @@ static void editor_process_normal(int c) {
     /* Quickfix pane: route all keys to qf handler. */
     if (E.buftabs[E.cur_buftab].is_qf) {
         qf_handle_key(c);
+        return;
+    }
+
+    /* Blame pane: route all keys to blame handler. */
+    if (E.buftabs[E.cur_buftab].is_blame) {
+        blame_handle_key(c);
+        return;
+    }
+
+    /* Diff pane (HEAD): read-only, navigation + q to close. */
+    if (E.buftabs[E.cur_buftab].is_diff) {
+        if (c == 'q' || c == '\x1b') { diff_close(); return; }
+        if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
+            E.cy++;
+            if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+        } else if ((c == ARROW_UP || c == 'k') && E.cy > 0) {
+            E.cy--;
+            if (E.cy < E.rowoff) E.rowoff = E.cy;
+        } else if (c == 'G') {
+            E.cy = E.buf.numrows - 1;
+        } else if (c == 'g') {
+            E.cy = 0; E.rowoff = 0;
+        }
+        /* Sync scroll to source pane. */
+        int src_buf = E.buftabs[E.cur_buftab].diff_source_buf;
+        for (int i = 0; i < E.num_panes; i++) {
+            if (E.panes[i].buf_idx == src_buf) {
+                E.panes[i].cy     = E.cy;
+                E.panes[i].rowoff = E.rowoff;
+                break;
+            }
+        }
         return;
     }
 

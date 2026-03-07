@@ -152,6 +152,16 @@ static int visual_col_range_for(int filerow, int vis_anchor_row, int vis_anchor_
     return 1;
 }
 
+/* Diff background escape (bg-only, RGB): dark opaque tints. */
+static const char *diff_bg_escape(char sign) {
+    switch (sign) {
+        case GIT_SIGN_ADD: return "\x1b[48;2;30;50;30m";
+        case GIT_SIGN_MOD: return "\x1b[48;2;50;50;20m";
+        case GIT_SIGN_DEL: return "\x1b[48;2;50;30;30m";
+        default:           return NULL;
+    }
+}
+
 /* Render a row's content within a visual-column viewport.
    vcol_start / vcol_count are in visual columns (tabs expanded).
    All highlight coordinates (bm0, bm1, vis_c0, vis_c1, cursor_col)
@@ -161,7 +171,8 @@ static int visual_col_range_for(int filerow, int vis_anchor_row, int vis_anchor_
 static void render_row_content(AppendBuf *ab, const Row *row,
                                int vcol_start, int vcol_count, int tabwidth,
                                const SearchQuery *q, int bm0, int bm1,
-                               int vis_c0, int vis_c1, int cursor_col) {
+                               int vis_c0, int vis_c1, int cursor_col,
+                               char diff_bg) {
     if (vcol_count <= 0 || row->len == 0) return;
 
     /* Build final_hl[row->len] — byte-indexed highlight array. */
@@ -205,10 +216,17 @@ static void render_row_content(AppendBuf *ab, const Row *row,
     if (cursor_col >= 0 && cursor_col < row->len)
         fhl[cursor_col] = row->hl ? row->hl[cursor_col] : HL_NORMAL;
 
+    /* Diff background (RGB): dark opaque tints. */
+    const char *bg_esc = diff_bg_escape(diff_bg);
+    int bg_esc_len = bg_esc ? (int)strlen(bg_esc) : 0;
+
     /* Render char by char, expanding tabs, clipped to the vcol viewport. */
     unsigned char prev_hl = HL_NORMAL;
     int any_esc = 0;
     int vcol    = 0;   /* visual column of the current byte */
+
+    /* Emit diff background at the start of the line. */
+    if (bg_esc) { ab_append(ab, bg_esc, bg_esc_len); any_esc = 1; }
 
     for (int i = 0; i < row->len; i++) {
         unsigned char ch  = (unsigned char)row->chars[i];
@@ -227,6 +245,7 @@ static void render_row_content(AppendBuf *ab, const Row *row,
 
         if (cur != prev_hl) {
             ab_append(ab, "\x1b[m", 3);
+            if (bg_esc) ab_append(ab, bg_esc, bg_esc_len);
             const char *esc = hl_to_escape(cur);
             if (esc) ab_append(ab, esc, (int)strlen(esc));
             prev_hl = cur;
@@ -315,9 +334,24 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                            int bm_valid, int bm_row, int bm_col) {
     int is_tree      = E.buftabs[p->buf_idx].is_tree;
     int is_qf        = E.buftabs[p->buf_idx].is_qf;
-    int gw           = (is_tree || is_qf) ? 0 : gutter_width_for(buf, p->buf_idx);
-    int has_marks    = (is_tree || is_qf) ? 0 : buf_has_marks(p->buf_idx);
+    int is_blame     = E.buftabs[p->buf_idx].is_blame;
+    int is_diff      = E.buftabs[p->buf_idx].is_diff;
+    int no_gutter    = is_tree || is_qf || is_blame;
+    int gw           = no_gutter ? 0 : gutter_width_for(buf, p->buf_idx);
+    int has_marks    = no_gutter ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
+
+    /* Determine if this pane should show diff background highlighting.
+       True for the diff pane itself, and for the source pane of an active diff. */
+    int show_diff_bg = is_diff;
+    if (!show_diff_bg) {
+        for (int di = 0; di < E.num_panes; di++) {
+            BufTab *dbt = &E.buftabs[E.panes[di].buf_idx];
+            if (dbt->is_diff && dbt->diff_source_buf == p->buf_idx) {
+                show_diff_bg = 1; break;
+            }
+        }
+    }
 
     /* Cascade hl_open_comment for dirty rows. */
     if (syn && buf->hl_dirty_from < buf->numrows) {
@@ -333,7 +367,18 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;%dH", p->top + y, p->left);
         ab_append(ab, mv, mvlen);
 
-        /* Erase this pane row (only within pane width). */
+        /* Diff background: set before erase so whole row gets the tint. */
+        char row_dbg = 0;
+        const char *row_bg = NULL;
+        if (show_diff_bg && buf->git_signs && filerow < buf->git_signs_count
+            && filerow < buf->numrows) {
+            row_dbg = buf->git_signs[filerow];
+            row_bg  = diff_bg_escape(row_dbg);
+        }
+        if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
+
+        /* Erase this pane row (only within pane width).
+           When row_bg is active, ECH fills cells with the diff tint. */
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
         ab_append(ab, erase, elen);
@@ -427,6 +472,32 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             continue;
         }
 
+        /* Blame pane: hash in dark yellow, rest in dark cyan. */
+        if (is_blame && filerow < buf->numrows) {
+            Row *row = &buf->rows[filerow];
+            int avail = p->width;
+            int rlen = row->len < avail ? row->len : avail;
+            int is_sel = (filerow == pcy);
+            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+
+            /* Find the end of the hash (first space). */
+            int hash_end = 0;
+            while (hash_end < rlen && row->chars[hash_end] != ' ') hash_end++;
+
+            /* Hash: dark yellow (\x1b[33m). */
+            ab_append(ab, "\x1b[33m", 5);
+            ab_append(ab, row->chars, hash_end);
+
+            /* Rest: dark cyan (\x1b[36m). */
+            if (hash_end < rlen) {
+                ab_append(ab, "\x1b[36m", 5);
+                ab_append(ab, row->chars + hash_end, rlen - hash_end);
+            }
+
+            ab_append(ab, "\x1b[m", 3);
+            continue;
+        }
+
         if (buf->numrows == 0) {
             /* Empty buffer: splash only for single-pane active. */
             if (p->width > 1) {
@@ -446,6 +517,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 }
             }
         } else if (filerow >= buf->numrows) {
+            if (row_bg) ab_append(ab, "\x1b[m", 3);
             ab_append(ab, "~", 1);
         } else {
             /* Gutter */
@@ -460,18 +532,42 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 if (has_git) {
                     char gs = (filerow < buf->git_signs_count)
                               ? buf->git_signs[filerow] : ' ';
-                    if (gs == '+')      ab_append(ab, "\x1b[32m+\x1b[m", 10);
-                    else if (gs == '~') ab_append(ab, "\x1b[33m~\x1b[m", 10);
-                    else if (gs == '-') ab_append(ab, "\x1b[31m-\x1b[m", 10);
-                    else                ab_append(ab, " ", 1);
+                    if (gs == '+') {
+                        ab_append(ab, "\x1b[32m+", 6);
+                    } else if (gs == '~') {
+                        ab_append(ab, "\x1b[33m~", 6);
+                    } else if (gs == '-') {
+                        ab_append(ab, "\x1b[31m-", 6);
+                    } else {
+                        ab_append(ab, " ", 1);
+                    }
+                    /* Reset fg but keep bg. */
+                    ab_append(ab, "\x1b[m", 3);
+                    if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
                 }
 
-                ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
+                /* Line number: diff-aware coloring. */
+                if (row_bg) {
+                    if (row_dbg == GIT_SIGN_ADD)
+                        ab_append(ab, "\x1b[38;5;77m", 11);  /* light green */
+                    else if (row_dbg == GIT_SIGN_DEL)
+                        ab_append(ab, "\x1b[38;5;167m", 12); /* light red */
+                    else if (row_dbg == GIT_SIGN_MOD)
+                        ab_append(ab, "\x1b[38;5;186m", 12); /* light yellow */
+                    else
+                        ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
+                } else {
+                    ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
+                }
                 if (has_marks) {
                     char mc = mark_char_at(p->buf_idx, filerow);
                     if (mc) {
                         ab_append(ab, "\x1b[33m", 5); /* yellow mark char */
                         ab_append(ab, &mc, 1);
+                        if (row_bg) {
+                            ab_append(ab, "\x1b[m", 3);
+                            ab_append(ab, row_bg, (int)strlen(row_bg));
+                        }
                         ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
                     } else {
                         ab_append(ab, " ", 1);
@@ -482,6 +578,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 ab_append(ab, num, nlen);
                 ab_append(ab, " ", 1);
                 ab_append(ab, "\x1b[m", 3);
+                if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
             }
 
             Row *row = &buf->rows[filerow];
@@ -508,9 +605,14 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             /* Exempt cursor cell from overlays (active pane cursor row only). */
             int cur_col = (vis_ar >= 0 && filerow == pcy) ? pcx : -1;
 
+            /* Diff background sign for this row. */
+            char dbg = 0;
+            if (show_diff_bg && buf->git_signs && filerow < buf->git_signs_count)
+                dbg = buf->git_signs[filerow];
+
             render_row_content(ab, row, pco, content_cols,
                                E.opts.tabwidth, hl_q,
-                               bm0, bm1, vis_c0, vis_c1, cur_col);
+                               bm0, bm1, vis_c0, vis_c1, cur_col, dbg);
         }
     }
 }
@@ -557,6 +659,46 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
             ? snprintf(left,  sizeof(left),  " [Quickfix] %d results: \"%s\"",
                        ql->count, ql->pattern)
             : snprintf(left,  sizeof(left),  " [Quickfix]");
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Blame pane: compact status. */
+    if (E.buftabs[p->buf_idx].is_blame) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        int src = E.buftabs[p->buf_idx].blame_source_buf;
+        const char *fname = E.buftabs[src].buf.filename;
+        if (!fname) fname = "[No Name]";
+        char left[128], right[16];
+        int llen = snprintf(left, sizeof(left), " [Blame] %.30s", fname);
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Diff pane: compact status. */
+    if (E.buftabs[p->buf_idx].is_diff) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        const char *fname = buf->filename ? buf->filename : "[No Name]";
+        char left[128], right[16];
+        int llen = snprintf(left, sizeof(left), " [HEAD] %.30s", fname);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
         if (llen > p->width) llen = p->width;
         ab_append(ab, left, llen);
@@ -888,8 +1030,47 @@ static void draw_global_command_bar(AppendBuf *ab) {
 
 /* ── Main refresh ────────────────────────────────────────────────────── */
 
+/* Sync scroll between a linked pane (blame or diff) and its source pane. */
+static void linked_pane_sync_scroll(void) {
+    for (int i = 0; i < E.num_panes; i++) {
+        BufTab *bt = &E.buftabs[E.panes[i].buf_idx];
+        int src_buf;
+        if (bt->is_blame)     src_buf = bt->blame_source_buf;
+        else if (bt->is_diff) src_buf = bt->diff_source_buf;
+        else continue;
+        /* Find the source pane. */
+        for (int j = 0; j < E.num_panes; j++) {
+            if (E.panes[j].buf_idx != src_buf) continue;
+
+            /* Determine the live rowoff/cy of source and blame panes. */
+            int src_ro, src_cy, blm_ro, blm_cy;
+            if (j == E.cur_pane) {
+                src_ro = E.rowoff; src_cy = E.cy;
+            } else {
+                src_ro = E.panes[j].rowoff; src_cy = E.panes[j].cy;
+            }
+            if (i == E.cur_pane) {
+                blm_ro = E.rowoff; blm_cy = E.cy;
+            } else {
+                blm_ro = E.panes[i].rowoff; blm_cy = E.panes[i].cy;
+            }
+
+            /* Active pane is the master. Sync the other. */
+            if (j == E.cur_pane) {
+                E.panes[i].rowoff = src_ro;
+                E.panes[i].cy     = src_cy;
+            } else if (i == E.cur_pane) {
+                E.panes[j].rowoff = blm_ro;
+                E.panes[j].cy     = blm_cy;
+            }
+            break;
+        }
+    }
+}
+
 void editor_refresh_screen(void) {
     editor_scroll();
+    linked_pane_sync_scroll();
 
     AppendBuf ab = ABUF_INIT;
 

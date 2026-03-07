@@ -84,14 +84,15 @@ static void shell_quote(const char *s, char *out, int outlen) {
 
 /* Parse a hunk header line: "@@ -old_start[,old_count] +new_start[,new_count] @@"
    Returns 1 on success. */
-static int parse_hunk(const char *line, int *old_count, int *new_start, int *new_count) {
+static int parse_hunk(const char *line, int *old_start, int *old_count,
+                      int *new_start, int *new_count) {
     /* Expect "@@ -" */
     const char *p = line;
     if (p[0] != '@' || p[1] != '@' || p[2] != ' ' || p[3] != '-') return 0;
     p += 4;
 
     /* old_start[,old_count] */
-    /* int old_start = */ (void)strtol(p, (char **)&p, 10);
+    *old_start = (int)strtol(p, (char **)&p, 10);
     if (*p == ',') { p++; *old_count = (int)strtol(p, (char **)&p, 10); }
     else           *old_count = 1;
 
@@ -106,28 +107,62 @@ static int parse_hunk(const char *line, int *old_count, int *new_start, int *new
     return 1;
 }
 
-/* Apply parsed hunk headers to the signs array. */
+/* Apply parsed hunk headers to the new-side signs array. */
 static void apply_hunks(FILE *fp, char *signs, int numrows) {
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
         if (line[0] != '@' || line[1] != '@') continue;
 
-        int old_count, new_start, new_count;
-        if (!parse_hunk(line, &old_count, &new_start, &new_count)) continue;
+        int old_start, old_count, new_start, new_count;
+        if (!parse_hunk(line, &old_start, &old_count, &new_start, &new_count))
+            continue;
 
         if (old_count == 0 && new_count > 0) {
-            /* Pure addition. */
             for (int i = new_start; i < new_start + new_count && i <= numrows; i++)
                 if (i >= 1) signs[i - 1] = GIT_SIGN_ADD;
         } else if (new_count == 0 && old_count > 0) {
-            /* Pure deletion — mark the line just above. */
-            int mark = new_start - 1;   /* new_start is line *after* deletion */
+            int mark = new_start - 1;
             if (mark < 0) mark = 0;
             if (mark < numrows) signs[mark] = GIT_SIGN_DEL;
         } else {
-            /* Modification. */
             for (int i = new_start; i < new_start + new_count && i <= numrows; i++)
                 if (i >= 1) signs[i - 1] = GIT_SIGN_MOD;
+        }
+    }
+}
+
+/* Apply parsed hunk headers to both old-side and new-side signs arrays. */
+static void apply_hunks_both(FILE *fp,
+                             char *old_signs, int old_numrows,
+                             char *new_signs, int new_numrows) {
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        if (line[0] != '@' || line[1] != '@') continue;
+
+        int old_start, old_count, new_start, new_count;
+        if (!parse_hunk(line, &old_start, &old_count, &new_start, &new_count))
+            continue;
+
+        if (old_count == 0 && new_count > 0) {
+            /* Pure addition in new: green on new side, mark deletion point on old. */
+            for (int i = new_start; i < new_start + new_count && i <= new_numrows; i++)
+                if (i >= 1) new_signs[i - 1] = GIT_SIGN_ADD;
+            int mark = old_start;  /* line after which insertion happened */
+            if (mark < 1) mark = 1;
+            if (mark <= old_numrows) old_signs[mark - 1] = GIT_SIGN_DEL;
+        } else if (new_count == 0 && old_count > 0) {
+            /* Pure deletion from old: red on old side, mark deletion point on new. */
+            for (int i = old_start; i < old_start + old_count && i <= old_numrows; i++)
+                if (i >= 1) old_signs[i - 1] = GIT_SIGN_DEL;
+            int mark = new_start - 1;
+            if (mark < 0) mark = 0;
+            if (mark < new_numrows) new_signs[mark] = GIT_SIGN_DEL;
+        } else {
+            /* Modification: yellow on both sides. */
+            for (int i = old_start; i < old_start + old_count && i <= old_numrows; i++)
+                if (i >= 1) old_signs[i - 1] = GIT_SIGN_MOD;
+            for (int i = new_start; i < new_start + new_count && i <= new_numrows; i++)
+                if (i >= 1) new_signs[i - 1] = GIT_SIGN_MOD;
         }
     }
 }
@@ -170,4 +205,155 @@ char *git_diff_signs(const char *filename, const char *const *row_chars,
     pclose(fp);
     unlink(tmppath);
     return signs;
+}
+
+void git_diff_signs_both(const char *filename,
+                         const char *const *new_chars, const int *new_lens,
+                         int new_numrows,
+                         const char *const *old_chars, const int *old_lens,
+                         int old_numrows,
+                         char **out_new_signs, char **out_old_signs) {
+    *out_new_signs = NULL;
+    *out_old_signs = NULL;
+    if (!filename || new_numrows <= 0 || old_numrows <= 0) return;
+
+    /* Write both versions to temp files. */
+    char tmp_new[] = "/tmp/qe_dnew_XXXXXX";
+    char tmp_old[] = "/tmp/qe_dold_XXXXXX";
+    int fd_new = mkstemp(tmp_new);
+    int fd_old = mkstemp(tmp_old);
+    if (fd_new < 0 || fd_old < 0) {
+        if (fd_new >= 0) { close(fd_new); unlink(tmp_new); }
+        if (fd_old >= 0) { close(fd_old); unlink(tmp_old); }
+        return;
+    }
+    for (int i = 0; i < old_numrows; i++) {
+        if (old_lens[i] > 0) write(fd_old, old_chars[i], old_lens[i]);
+        write(fd_old, "\n", 1);
+    }
+    close(fd_old);
+    for (int i = 0; i < new_numrows; i++) {
+        if (new_lens[i] > 0) write(fd_new, new_chars[i], new_lens[i]);
+        write(fd_new, "\n", 1);
+    }
+    close(fd_new);
+
+    char q_old[256], q_new[256];
+    shell_quote(tmp_old, q_old, sizeof(q_old));
+    shell_quote(tmp_new, q_new, sizeof(q_new));
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "diff -U0 -- %s %s 2>/dev/null", q_old, q_new);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { unlink(tmp_old); unlink(tmp_new); return; }
+
+    char *ns = malloc(new_numrows);
+    char *os = malloc(old_numrows);
+    if (!ns || !os) { free(ns); free(os); pclose(fp); unlink(tmp_old); unlink(tmp_new); return; }
+    memset(ns, GIT_SIGN_NONE, new_numrows);
+    memset(os, GIT_SIGN_NONE, old_numrows);
+
+    apply_hunks_both(fp, os, old_numrows, ns, new_numrows);
+
+    pclose(fp);
+    unlink(tmp_old);
+    unlink(tmp_new);
+    *out_new_signs = ns;
+    *out_old_signs = os;
+}
+
+/* ── Show HEAD ───────────────────────────────────────────────────────── */
+
+char **git_show_head(const char *filename, int *out_count) {
+    *out_count = 0;
+    if (!filename) return NULL;
+
+    char qfile[1024];
+    shell_quote(filename, qfile, sizeof(qfile));
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "git show HEAD:%s 2>/dev/null", qfile);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return NULL;
+
+    int cap = 256, count = 0;
+    char **lines = malloc(sizeof(char *) * cap);
+    if (!lines) { pclose(fp); return NULL; }
+
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+
+        if (count >= cap) {
+            cap *= 2;
+            char **tmp = realloc(lines, sizeof(char *) * cap);
+            if (!tmp) break;
+            lines = tmp;
+        }
+        lines[count++] = strdup(line);
+    }
+    pclose(fp);
+
+    if (count == 0) { free(lines); return NULL; }
+    *out_count = count;
+    return lines;
+}
+
+/* ── Blame ───────────────────────────────────────────────────────────── */
+
+char **git_blame(const char *filename, int *out_count) {
+    *out_count = 0;
+    if (!filename) return NULL;
+
+    char qfile[1024];
+    shell_quote(filename, qfile, sizeof(qfile));
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+             "git blame --date=short -- %s 2>/dev/null", qfile);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return NULL;
+
+    int cap = 256, count = 0;
+    char **lines = malloc(sizeof(char *) * cap);
+    if (!lines) { pclose(fp); return NULL; }
+
+    char line[2048];
+    while (fgets(line, sizeof(line), fp)) {
+        /* Strip trailing newline. */
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+
+        /* git blame format: "hash (Author  Date  lineno) content"
+           Extract everything up to and including ')'. */
+        char *paren = strchr(line, ')');
+        if (!paren) continue;
+
+        int prefix_len = (int)(paren - line + 1);
+
+        /* Build a trimmed blame string: "hash Author Date" */
+        char buf[128];
+        int  blen = prefix_len < (int)sizeof(buf) - 1
+                    ? prefix_len : (int)sizeof(buf) - 1;
+        memcpy(buf, line, blen);
+        buf[blen] = '\0';
+
+        if (count >= cap) {
+            cap *= 2;
+            char **tmp = realloc(lines, sizeof(char *) * cap);
+            if (!tmp) break;
+            lines = tmp;
+        }
+        lines[count++] = strdup(buf);
+    }
+    pclose(fp);
+
+    *out_count = count;
+    return lines;
 }

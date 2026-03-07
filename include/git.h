@@ -19,4 +19,25 @@ char *git_diff_signs(const char *filename, const char *const *row_chars,
    For detached HEAD, writes the short SHA.  Returns 1 on success, 0 if not a git repo. */
 int git_current_branch(char *out, int outlen);
 
+/* Compute diff signs for both old (HEAD) and new (working) sides simultaneously.
+   Writes both to temp files, diffs them, and fills both sign arrays.
+   Caller must free both *out_new_signs and *out_old_signs. */
+void git_diff_signs_both(const char *filename,
+                         const char *const *new_chars, const int *new_lens,
+                         int new_numrows,
+                         const char *const *old_chars, const int *old_lens,
+                         int old_numrows,
+                         char **out_new_signs, char **out_old_signs);
+
+/* Retrieve the HEAD version of a file via `git show HEAD:<filename>`.
+   Returns a malloc'd array of line strings (one per line, no trailing newline).
+   Sets *out_count to the number of lines.  Returns NULL on error.
+   Caller must free each string and the array. */
+char **git_show_head(const char *filename, int *out_count);
+
+/* Run `git blame --date=short` and return an array of blame-prefix strings
+   (one per source line: "abcdef12 Author     2024-01-15").
+   Returns NULL on error.  Caller must free each string and the array. */
+char **git_blame(const char *filename, int *out_count);
+
 #endif
