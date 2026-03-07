@@ -70,4 +70,22 @@ int git_stage_hunk(const char *filename,
                    const char *const *row_chars, const int *row_lens,
                    int numrows, int hunk_idx);
 
+/* A single git log entry. */
+typedef struct {
+    char hash[12];      /* short hash */
+    char date[12];      /* YYYY-MM-DD */
+    char author[32];    /* author name (truncated) */
+    char subject[128];  /* first line of commit message */
+} GitLogEntry;
+
+/* Get git log entries (most recent first).
+   Returns malloc'd array; caller must free().
+   limit = max entries (0 = default 200). */
+GitLogEntry *git_log(int limit, int *out_count);
+
+/* Get full `git show <hash>` output as an array of lines.
+   Returns malloc'd array of strdup'd strings; caller frees each + array.
+   Sets *out_count. */
+char **git_show_commit(const char *hash, int *out_count);
+
 #endif

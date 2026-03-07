@@ -616,3 +616,94 @@ char **git_blame(const char *filename, int *out_count) {
     *out_count = count;
     return lines;
 }
+
+/* ── Log ─────────────────────────────────────────────────────────────── */
+
+GitLogEntry *git_log(int limit, int *out_count) {
+    *out_count = 0;
+    if (limit <= 0) limit = 200;
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "git log --format='%%h|%%ad|%%an|%%s' --date=short -n %d 2>/dev/null",
+             limit);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return NULL;
+
+    int cap = 64, count = 0;
+    GitLogEntry *entries = malloc(sizeof(GitLogEntry) * cap);
+    if (!entries) { pclose(fp); return NULL; }
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+
+        /* Parse: hash|date|author|subject */
+        char *p1 = strchr(line, '|');
+        if (!p1) continue;
+        *p1++ = '\0';
+        char *p2 = strchr(p1, '|');
+        if (!p2) continue;
+        *p2++ = '\0';
+        char *p3 = strchr(p2, '|');
+        if (!p3) continue;
+        *p3++ = '\0';
+
+        if (count >= cap) {
+            cap *= 2;
+            GitLogEntry *tmp = realloc(entries, sizeof(GitLogEntry) * cap);
+            if (!tmp) break;
+            entries = tmp;
+        }
+
+        GitLogEntry *e = &entries[count++];
+        snprintf(e->hash,    sizeof(e->hash),    "%s", line);
+        snprintf(e->date,    sizeof(e->date),    "%s", p1);
+        snprintf(e->author,  sizeof(e->author),  "%s", p2);
+        snprintf(e->subject, sizeof(e->subject), "%s", p3);
+    }
+    pclose(fp);
+
+    if (count == 0) { free(entries); return NULL; }
+    *out_count = count;
+    return entries;
+}
+
+char **git_show_commit(const char *hash, int *out_count) {
+    *out_count = 0;
+    if (!hash) return NULL;
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "git show --stat --patch %s 2>/dev/null", hash);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return NULL;
+
+    int cap = 128, count = 0;
+    char **lines = malloc(sizeof(char *) * cap);
+    if (!lines) { pclose(fp); return NULL; }
+
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+
+        if (count >= cap) {
+            cap *= 2;
+            char **tmp = realloc(lines, sizeof(char *) * cap);
+            if (!tmp) break;
+            lines = tmp;
+        }
+        lines[count++] = strdup(line);
+    }
+    pclose(fp);
+
+    if (count == 0) { free(lines); return NULL; }
+    *out_count = count;
+    return lines;
+}

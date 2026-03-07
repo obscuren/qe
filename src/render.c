@@ -337,7 +337,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int is_blame     = E.buftabs[p->buf_idx].is_blame;
     int is_diff      = E.buftabs[p->buf_idx].is_diff;
     int is_commit    = E.buftabs[p->buf_idx].is_commit;
-    int no_gutter    = is_tree || is_qf || is_blame || is_commit;
+    int is_log       = E.buftabs[p->buf_idx].is_log;
+    int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log;
     int gw           = no_gutter ? 0 : gutter_width_for(buf, p->buf_idx);
     int has_marks    = no_gutter ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
@@ -509,6 +510,74 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             ab_append(ab, row->chars, rlen);
             if (rlen > 0 && row->chars[0] == '#')
                 ab_append(ab, "\x1b[m", 3);
+            continue;
+        }
+
+        /* Git log pane: colored fields — hash|date|author|subject. */
+        if (is_log && filerow < buf->numrows) {
+            BufTab *lbt = &E.buftabs[p->buf_idx];
+            int is_sel = (filerow == pcy);
+            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+
+            if (filerow < lbt->log_count) {
+                GitLogEntry *e = &lbt->log_entries[filerow];
+                int avail = p->width;
+                int col = 0;
+
+                /* ▶ / space */
+                if (is_sel) { ab_append(ab, "\xe2\x96\xb6 ", 4); col += 2; }
+                else        { ab_append(ab, "  ", 2); col += 2; }
+
+                /* Hash: yellow */
+                int hlen = (int)strlen(e->hash);
+                if (col + hlen <= avail) {
+                    ab_append(ab, is_sel ? "\x1b[33;7m" : "\x1b[33m", is_sel ? 7 : 5);
+                    ab_append(ab, e->hash, hlen);
+                    col += hlen;
+                }
+
+                /* Space */
+                if (col < avail) { ab_append(ab, " ", 1); col++; }
+
+                /* Date: dim */
+                int dlen = (int)strlen(e->date);
+                if (col + dlen <= avail) {
+                    ab_append(ab, is_sel ? "\x1b[2;7m" : "\x1b[2m", is_sel ? 5 : 4);
+                    ab_append(ab, e->date, dlen);
+                    col += dlen;
+                }
+
+                /* Space */
+                if (col < avail) { ab_append(ab, " ", 1); col++; }
+
+                /* Author: cyan */
+                int alen = (int)strlen(e->author);
+                if (alen > 12) alen = 12;
+                if (col + alen <= avail) {
+                    ab_append(ab, is_sel ? "\x1b[36;7m" : "\x1b[36m", is_sel ? 7 : 5);
+                    ab_append(ab, e->author, alen);
+                    col += alen;
+                    /* Pad to 12. */
+                    int pad = 12 - alen;
+                    while (pad-- > 0 && col < avail) {
+                        ab_append(ab, " ", 1); col++;
+                    }
+                }
+
+                /* Space */
+                if (col < avail) { ab_append(ab, " ", 1); col++; }
+
+                /* Subject: default */
+                int slen = (int)strlen(e->subject);
+                if (slen > avail - col) slen = avail - col;
+                if (slen > 0) {
+                    ab_append(ab, is_sel ? "\x1b[m\x1b[7m" : "\x1b[m", is_sel ? 7 : 3);
+                    ab_append(ab, e->subject, slen);
+                    col += slen;
+                }
+            }
+
+            ab_append(ab, "\x1b[m", 3);
             continue;
         }
 
@@ -732,6 +801,26 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left),
                             " [Commit] :wq to commit, :q to abort");
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Log pane: status bar. */
+    if (E.buftabs[p->buf_idx].is_log) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        int lc = E.buftabs[p->buf_idx].log_count;
+        char left[128], right[16];
+        int llen = snprintf(left, sizeof(left),
+                            " [Git Log] %d commits", lc);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
         if (llen > p->width) llen = p->width;
         ab_append(ab, left, llen);

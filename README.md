@@ -406,6 +406,18 @@ In the file tree, press `a` on any entry to stage it. The tree colors update imm
 
 The current git branch (or short SHA for detached HEAD) is shown in the status bar.
 
+### `:Glog`
+
+Opens a bottom pane showing the commit history. Each entry is color-coded:
+- **Hash** in yellow, **date** in dim grey, **author** in cyan, **subject** in default white
+
+| Key     | Action                              |
+|---------|-------------------------------------|
+| `j`/`k` | Navigate entries                   |
+| `g`/`G` | Jump to first / last entry         |
+| `Enter` | Open full commit diff in a buffer  |
+| `q`     | Close log pane                     |
+
 ### `:Gblame`
 
 Opens a scroll-synced blame pane to the left showing commit hash, author, and date for each line. Hash is shown in yellow, metadata in cyan. Press `q` to close.

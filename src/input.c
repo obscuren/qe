@@ -1828,6 +1828,214 @@ static void blame_handle_key(int c) {
     }
 }
 
+/* ── Git log pane ────────────────────────────────────────────────────── */
+
+static int log_pane_idx(void) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].is_log) return i;
+    return -1;
+}
+
+static void log_close(void) {
+    int lpi = log_pane_idx();
+    if (lpi < 0) return;
+
+    Pane *lp = &E.panes[lpi];
+    int buf_idx = lp->buf_idx;
+
+    /* Expand the pane above. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i == lpi) continue;
+        Pane *q = &E.panes[i];
+        if (q->left == lp->left && q->width == lp->width &&
+            q->top + q->height + 1 == lp->top) {
+            q->height += lp->height + 1;
+            break;
+        }
+    }
+
+    /* Free log data. */
+    free(E.buftabs[buf_idx].log_entries);
+    if (E.cur_pane == lpi) {
+        for (int i = 0; i < E.buf.numrows; i++) {
+            free(E.buf.rows[i].chars);
+            free(E.buf.rows[i].hl);
+        }
+        free(E.buf.rows);
+        free(E.buf.git_signs);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+    } else {
+        buf_free(&E.buftabs[buf_idx].buf);
+    }
+    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+
+    /* Remove pane. */
+    for (int i = lpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
+    E.num_panes--;
+
+    /* Activate last content pane. */
+    int cpane = E.last_content_pane;
+    if (cpane >= E.num_panes || cpane < 0) cpane = 0;
+    if (E.cur_pane == lpi || E.cur_pane >= E.num_panes) {
+        int donor_buf = E.panes[cpane].buf_idx;
+        if (E.cur_buftab != donor_buf) {
+            editor_buf_restore(donor_buf);
+            E.cur_buftab = donor_buf;
+        }
+        E.cur_pane   = cpane;
+        E.screenrows = E.panes[cpane].height;
+        E.screencols = E.panes[cpane].width;
+        E.cx     = E.panes[cpane].cx;
+        E.cy     = E.panes[cpane].cy;
+        E.rowoff = E.panes[cpane].rowoff;
+        E.coloff = E.panes[cpane].coloff;
+    }
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+}
+
+static void log_open(void) {
+    if (log_pane_idx() >= 0) { log_close(); return; }
+
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
+
+    int log_count = 0;
+    GitLogEntry *entries = git_log(200, &log_count);
+    if (!entries || log_count == 0) {
+        status_err("git log failed (any commits?)");
+        return;
+    }
+
+    /* Allocate log buftab. */
+    int lidx = E.num_buftabs++;
+    memset(&E.buftabs[lidx], 0, sizeof(BufTab));
+    E.buftabs[lidx].is_log = 1;
+    E.buftabs[lidx].log_entries = entries;
+    E.buftabs[lidx].log_count   = log_count;
+    buf_init(&E.buftabs[lidx].buf);
+
+    /* Populate buffer rows (one per commit, for scrolling). */
+    for (int i = 0; i < log_count; i++) {
+        GitLogEntry *e = &entries[i];
+        char line[256];
+        int len = snprintf(line, sizeof(line), "%s %s %-12.12s %s",
+                           e->hash, e->date, e->author, e->subject);
+        buf_insert_row(&E.buftabs[lidx].buf, i, line, len);
+    }
+    E.buftabs[lidx].buf.dirty = 0;
+
+    /* Create bottom pane (same pattern as quickfix). */
+    int height = E.opts.qf_height_rows;
+    if (height < 3) height = 3;
+
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+
+    Pane *sp = &E.panes[E.cur_pane];
+    if (sp->height < height + 3) {
+        /* Not enough room — use half. */
+        height = sp->height / 2;
+        if (height < 3) height = 3;
+    }
+    sp->height -= (height + 1);
+
+    /* Insert log pane after current. */
+    int lpi = E.cur_pane + 1;
+    for (int i = E.num_panes; i > lpi; i--) E.panes[i] = E.panes[i - 1];
+    E.num_panes++;
+
+    Pane *lp = &E.panes[lpi];
+    lp->top    = sp->top + sp->height + 1;
+    lp->left   = sp->left;
+    lp->height = height;
+    lp->width  = sp->width;
+    lp->buf_idx = lidx;
+    lp->cx = 0; lp->cy = 0;
+    lp->rowoff = 0; lp->coloff = 0;
+
+    /* Activate the log pane. */
+    E.panes[E.cur_pane].buf_idx = E.cur_buftab;  /* ensure source pane slot is correct */
+    pane_activate(lpi);
+}
+
+/* Open a scratch buffer showing `git show <hash>`. */
+static void log_show_commit(const char *hash) {
+    if (!hash || !*hash) return;
+
+    int line_count = 0;
+    char **lines = git_show_commit(hash, &line_count);
+    if (!lines || line_count == 0) {
+        status_err("git show failed");
+        return;
+    }
+
+    /* Close log pane first, then open the commit in the main pane. */
+    log_close();
+
+    if (E.num_buftabs >= MAX_BUFS) {
+        for (int i = 0; i < line_count; i++) free(lines[i]);
+        free(lines);
+        status_err("Too many buffers");
+        return;
+    }
+
+    /* Create a new buffer for the commit. */
+    int cidx = E.num_buftabs++;
+    memset(&E.buftabs[cidx], 0, sizeof(BufTab));
+    buf_init(&E.buftabs[cidx].buf);
+
+    for (int i = 0; i < line_count; i++) {
+        int len = (int)strlen(lines[i]);
+        buf_insert_row(&E.buftabs[cidx].buf, i, lines[i], len);
+        free(lines[i]);
+    }
+    free(lines);
+    E.buftabs[cidx].buf.dirty = 0;
+
+    /* Set a descriptive filename. */
+    char name[64];
+    snprintf(name, sizeof(name), "[commit %s]", hash);
+    E.buftabs[cidx].buf.filename = strdup(name);
+
+    /* Switch to it. */
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+    E.panes[E.cur_pane].buf_idx = cidx;
+    E.cur_buftab = cidx;
+    editor_buf_restore(cidx);
+    E.syntax = NULL;
+    E.mode = MODE_NORMAL;
+    E.cy = 0; E.cx = 0;
+    E.rowoff = 0; E.coloff = 0;
+}
+
+static void log_handle_key(int c) {
+    if (c == 'q' || c == '\x1b') { log_close(); return; }
+
+    BufTab *bt = &E.buftabs[E.cur_buftab];
+
+    if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
+        E.cy++;
+        if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    } else if ((c == ARROW_UP || c == 'k') && E.cy > 0) {
+        E.cy--;
+        if (E.cy < E.rowoff) E.rowoff = E.cy;
+    } else if (c == 'G') {
+        E.cy = E.buf.numrows - 1;
+    } else if (c == 'g') {
+        E.cy = 0; E.rowoff = 0;
+    } else if (c == '\r') {
+        /* Enter: show the selected commit. */
+        if (E.cy >= 0 && E.cy < bt->log_count) {
+            char hash[12];
+            snprintf(hash, sizeof(hash), "%s", bt->log_entries[E.cy].hash);
+            log_show_commit(hash);
+        }
+    }
+}
+
 /* ── Git commit buffer ───────────────────────────────────────────────── */
 
 static void commit_open(void) {
@@ -3089,6 +3297,11 @@ void editor_execute_command(void) {
         editor_update_git_signs();
         goto done;
 
+    /* ── :Glog ─────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "Glog") == 0 || strcmp(cmd, "glog") == 0) {
+        log_open();
+        goto done;
+
     /* ── :Gcommit ──────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "Gcommit") == 0 || strcmp(cmd, "gcommit") == 0) {
         commit_open();
@@ -3574,6 +3787,12 @@ static void editor_process_normal(int c) {
     /* Blame pane: route all keys to blame handler. */
     if (E.buftabs[E.cur_buftab].is_blame) {
         blame_handle_key(c);
+        return;
+    }
+
+    /* Log pane: route all keys to log handler. */
+    if (E.buftabs[E.cur_buftab].is_log) {
+        log_handle_key(c);
         return;
     }
 
