@@ -1742,8 +1742,34 @@ static void jump_forward(void) {
     jump_navigate(&E.jump_list[E.jump_cur]);
 }
 
-/* Open a new buffer (empty if filename==NULL) and switch to it. */
+/* Strip a leading "./" from a path for comparison purposes. */
+static const char *norm_path(const char *p) {
+    return (p[0] == '.' && p[1] == '/') ? p + 2 : p;
+}
+
+/* Open a new buffer (empty if filename==NULL) and switch to it.
+   If filename is already open in any buffer, switch the current pane to
+   that buffer instead of creating a duplicate (per-pane: we stay in the
+   current pane — we never jump focus to another pane). */
 static int open_new_buf(const char *filename) {
+    if (filename) {
+        const char *fn = norm_path(filename);
+        for (int i = 0; i < E.num_buftabs; i++) {
+            if (E.buftabs[i].is_tree) continue;
+            Buffer *b = (i == E.cur_buftab) ? &E.buf : &E.buftabs[i].buf;
+            if (!b->filename) continue;
+            if (strcmp(norm_path(b->filename), fn) == 0) {
+                /* Already open — make current pane show this buffer. */
+                if (i != E.cur_buftab) switch_to_buf(i);
+                E.panes[E.cur_pane].buf_idx = i;
+                /* Use E.buf.filename: if we just switched, b now points into
+                   the zeroed buftabs slot; E.buf holds the live filename. */
+                status_msg("\"%s\" (already open)", E.buf.filename);
+                return 1;
+            }
+        }
+    }
+
     if (E.num_buftabs >= MAX_BUFS) {
         status_err("Too many open buffers (max %d)", MAX_BUFS);
         return 0;
