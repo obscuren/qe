@@ -43,6 +43,17 @@ char **git_blame(const char *filename, int *out_count);
 /* Stage a file via `git add`.  Returns 1 on success. */
 int git_add(const char *filename);
 
+/* Unstage a file via `git reset HEAD`.  Returns 1 on success. */
+int git_reset(const char *filename);
+
+/* Stash working changes.  Optional message (NULL = default).  Returns 1 on success.
+   output[] receives the first line of git's output. */
+int git_stash(const char *message, char *output, int outlen);
+
+/* Pop the top stash entry.  Returns 1 on success.
+   output[] receives the first line of git's output. */
+int git_stash_pop(char *output, int outlen);
+
 /* Run `git commit` with the given message.  Returns 1 on success.
    output[] receives the first line of git's output (for status message). */
 int git_commit(const char *message, char *output, int outlen);

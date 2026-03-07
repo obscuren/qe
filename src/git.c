@@ -274,6 +274,46 @@ int git_add(const char *filename) {
     return (system(cmd) == 0) ? 1 : 0;
 }
 
+int git_reset(const char *filename) {
+    if (!filename) return 0;
+    char qfile[1024];
+    shell_quote(filename, qfile, sizeof(qfile));
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "git reset HEAD -- %s 2>/dev/null", qfile);
+    return (system(cmd) == 0) ? 1 : 0;
+}
+
+int git_stash(const char *message, char *output, int outlen) {
+    char cmd[512];
+    if (message && *message) {
+        char qmsg[256];
+        shell_quote(message, qmsg, sizeof(qmsg));
+        snprintf(cmd, sizeof(cmd), "git stash push -m %s 2>&1", qmsg);
+    } else {
+        snprintf(cmd, sizeof(cmd), "git stash 2>&1");
+    }
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return 0;
+    if (output && outlen > 0) {
+        if (!fgets(output, outlen, fp)) output[0] = '\0';
+        /* Strip trailing newline. */
+        int len = (int)strlen(output);
+        if (len > 0 && output[len-1] == '\n') output[len-1] = '\0';
+    }
+    return (pclose(fp) == 0) ? 1 : 0;
+}
+
+int git_stash_pop(char *output, int outlen) {
+    FILE *fp = popen("git stash pop 2>&1", "r");
+    if (!fp) return 0;
+    if (output && outlen > 0) {
+        if (!fgets(output, outlen, fp)) output[0] = '\0';
+        int len = (int)strlen(output);
+        if (len > 0 && output[len-1] == '\n') output[len-1] = '\0';
+    }
+    return (pclose(fp) == 0) ? 1 : 0;
+}
+
 int git_commit(const char *message, char *output, int outlen) {
     if (!message || !*message) return 0;
 

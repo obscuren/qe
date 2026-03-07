@@ -1491,6 +1491,20 @@ static void tree_handle_key(int c) {
                 }
             }
             break;
+        case 'u':   /* git reset (unstage) file/dir under cursor */
+            if (ts) {
+                int eidx = E.cy - 1;
+                if (eidx >= 0 && eidx < ts->count) {
+                    if (git_reset(ts->entries[eidx].path)) {
+                        status_msg("Unstaged: %s", ts->entries[eidx].name);
+                        tree_update_git_status(ts);
+                        tree_render_to_buf(ts, &E.buf);
+                    } else {
+                        status_err("git reset failed");
+                    }
+                }
+            }
+            break;
         case ':':
             E.mode = MODE_COMMAND;
             E.cmdbuf[0] = '\0';
@@ -3313,6 +3327,42 @@ void editor_execute_command(void) {
             status_msg("Staged: %s", file);
         else
             status_err("git add failed: %s", file);
+        editor_update_git_signs();
+        goto done;
+
+    /* ── :Greset [file] ────────────────────────────────────────────── */
+    } else if (strncmp(cmd, "Greset", 6) == 0 || strncmp(cmd, "greset", 6) == 0) {
+        const char *file = cmd + 6;
+        while (*file == ' ') file++;
+        if (!*file) file = E.buf.filename;
+        if (!file) { status_err("No filename"); goto done; }
+        if (git_reset(file))
+            status_msg("Unstaged: %s", file);
+        else
+            status_err("git reset failed: %s", file);
+        editor_update_git_signs();
+        goto done;
+
+    /* ── :Gstash [message] ────────────────────────────────────────── */
+    } else if (strncmp(cmd, "Gstash", 6) == 0 || strncmp(cmd, "gstash", 6) == 0) {
+        const char *msg = cmd + 6;
+        while (*msg == ' ') msg++;
+        if (!*msg) msg = NULL;
+        char out[256];
+        if (git_stash(msg, out, sizeof(out)))
+            status_msg("%s", out);
+        else
+            status_err("git stash failed");
+        editor_update_git_signs();
+        goto done;
+
+    /* ── :Gpop ────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "Gpop") == 0 || strcmp(cmd, "gpop") == 0) {
+        char out[256];
+        if (git_stash_pop(out, sizeof(out)))
+            status_msg("%s", out);
+        else
+            status_err("git stash pop failed");
         editor_update_git_signs();
         goto done;
 

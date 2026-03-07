@@ -399,8 +399,18 @@ Also available as `:Gstage` and `:Grevert`.
 |------------------|-------------------------------------------|
 | `:Gadd`          | Stage the current file                    |
 | `:Gadd path`     | Stage a specific file or directory        |
+| `:Greset`        | Unstage the current file                  |
+| `:Greset path`   | Unstage a specific file or directory      |
 
-In the file tree, press `a` on any entry to stage it. The tree colors update immediately.
+In the file tree, press `a` on any entry to stage it, or `u` to unstage. The tree colors update immediately.
+
+### Stash
+
+| Command              | Action                                |
+|----------------------|---------------------------------------|
+| `:Gstash`            | Stash working changes                 |
+| `:Gstash message`    | Stash with a custom message           |
+| `:Gpop`              | Pop the top stash entry               |
 
 ### Branch name
 
