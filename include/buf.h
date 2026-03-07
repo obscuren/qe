@@ -32,4 +32,10 @@ int  buf_save(Buffer *b);
 
 void buf_mark_hl_dirty(Buffer *b, int row);
 
+/* Convert byte column → visual column (tabs expand to tabwidth stops). */
+int col_to_vcol(const Row *row, int col, int tabwidth);
+
+/* Convert visual column → nearest byte column. */
+int vcol_to_col(const Row *row, int vcol, int tabwidth);
+
 #endif

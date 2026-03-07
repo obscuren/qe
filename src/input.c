@@ -1177,12 +1177,15 @@ static void editor_process_visual(int c) {
    each keypress so the user's intended column is remembered across short lines. */
 static int s_vertical_move = 0;
 
-/* Restore cx from preferred_col on the (possibly new) current row.
-   Clamps to len-1 so the cursor always lands on a character, not the newline. */
+/* Restore cx from preferred_col (visual column) on the current row.
+   Finds the byte offset whose visual column is closest to preferred_col. */
 static void apply_preferred_col(void) {
-    int rowlen = E.cy < E.buf.numrows ? E.buf.rows[E.cy].len : 0;
-    int maxcol = rowlen > 0 ? rowlen - 1 : 0;
-    E.cx = E.preferred_col <= maxcol ? E.preferred_col : maxcol;
+    if (E.buf.numrows == 0 || E.cy >= E.buf.numrows) { E.cx = 0; return; }
+    Row *row = &E.buf.rows[E.cy];
+    int col = vcol_to_col(row, E.preferred_col, E.opts.tabwidth);
+    /* Clamp to last character (not past the newline). */
+    int maxcol = row->len > 0 ? row->len - 1 : 0;
+    E.cx = col <= maxcol ? col : maxcol;
 }
 
 static void editor_move_cursor(int key) {
@@ -2425,6 +2428,46 @@ static void editor_process_normal(int c) {
             break;
         }
 
+        /* --- * / # : search word under cursor forward / backward --- */
+        case '*':
+        case '#': {
+            if (E.buf.numrows == 0 || E.cy >= E.buf.numrows) break;
+            Row *row = &E.buf.rows[E.cy];
+            if (E.cx >= row->len) break;
+
+            /* Find word boundaries around cx. */
+            int ws = E.cx;
+            while (ws > 0 && (isalnum((unsigned char)row->chars[ws-1])
+                               || row->chars[ws-1] == '_'))
+                ws--;
+            int we = E.cx;
+            while (we < row->len && (isalnum((unsigned char)row->chars[we])
+                                     || row->chars[we] == '_'))
+                we++;
+            if (we == ws) break;  /* not on a word character */
+
+            int wlen = we - ws;
+            if (wlen >= (int)sizeof(E.searchbuf)) wlen = sizeof(E.searchbuf) - 1;
+            memcpy(E.searchbuf, &row->chars[ws], wlen);
+            E.searchbuf[wlen] = '\0';
+            E.searchlen = wlen;
+            search_query_init_literal(&E.last_query, E.searchbuf, E.searchlen);
+            E.last_search_valid = 1;
+
+            int found_row, found_col;
+            int found = (c == '*')
+                ? search_find_next(&E.last_query, &E.buf, E.cy, E.cx, &found_row, &found_col)
+                : search_find_prev(&E.last_query, &E.buf, E.cy, E.cx, &found_row, &found_col);
+            if (found) {
+                jump_push();
+                E.cy = found_row;
+                E.cx = found_col;
+            } else {
+                status_err("Pattern not found: %s", E.searchbuf);
+            }
+            break;
+        }
+
         /* --- visual mode (count ignored) --- */
         case 'v':
             E.visual_anchor_row = E.cy;
@@ -2992,15 +3035,15 @@ static void handle_mouse_press(void) {
     /* Convert terminal coords to file coords. */
     int gw      = gutter_width_for_buf(&E.buf);
     int filerow = (my - p->top) + E.rowoff;
-    int filecol = (mx - p->left - gw) + E.coloff;
-    if (filecol < 0) filecol = 0;
+    int click_vcol = (mx - p->left - gw) + E.coloff;  /* visual column */
+    if (click_vcol < 0) click_vcol = 0;
     if (filerow < 0) filerow = 0;
+    int filecol = 0;
     if (E.buf.numrows > 0) {
         if (filerow >= E.buf.numrows) filerow = E.buf.numrows - 1;
-        int rowlen = E.buf.rows[filerow].len;
-        if (filecol > rowlen) filecol = rowlen;
-    } else {
-        filerow = 0; filecol = 0;
+        Row *row = &E.buf.rows[filerow];
+        filecol = vcol_to_col(row, click_vcol, E.opts.tabwidth);
+        if (filecol > row->len) filecol = row->len;
     }
     E.cy = filerow;
     E.cx = filecol;
@@ -3029,7 +3072,9 @@ void editor_process_keypress(void) {
     /* Mouse events are handled in all modes. */
     if (c == MOUSE_PRESS) {
         handle_mouse_press();
-        E.preferred_col = E.cx;   /* click sets a new preferred column */
+        E.preferred_col = (E.buf.numrows > 0 && E.cy < E.buf.numrows)
+            ? col_to_vcol(&E.buf.rows[E.cy], E.cx, E.opts.tabwidth)
+            : E.cx;   /* click sets a new preferred column */
         return;
     }
     if (c == MOUSE_SCROLL_UP)   { handle_mouse_scroll(-1); return; }
@@ -3048,5 +3093,10 @@ void editor_process_keypress(void) {
 
     /* After any non-vertical-move action, record the current column as the
        preferred column so future j/k movements try to restore it. */
-    if (!s_vertical_move) E.preferred_col = E.cx;
+    if (!s_vertical_move) {
+        /* Store visual column so j/k sticky-column works correctly with tabs. */
+        E.preferred_col = (E.buf.numrows > 0 && E.cy < E.buf.numrows)
+            ? col_to_vcol(&E.buf.rows[E.cy], E.cx, E.opts.tabwidth)
+            : E.cx;
+    }
 }

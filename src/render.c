@@ -56,10 +56,15 @@ static void editor_scroll(void) {
     if (E.cy >= E.rowoff + E.screenrows)
         E.rowoff = E.cy - E.screenrows + 1;
 
-    if (E.cx < E.coloff)
-        E.coloff = E.cx;
-    if (E.cx >= E.coloff + content_cols)
-        E.coloff = E.cx - content_cols + 1;
+    /* Horizontal scroll uses visual column so tabs scroll correctly. */
+    int vcx = 0;
+    if (E.buf.numrows > 0 && E.cy < E.buf.numrows)
+        vcx = col_to_vcol(&E.buf.rows[E.cy], E.cx, E.opts.tabwidth);
+
+    if (vcx < E.coloff)
+        E.coloff = vcx;
+    if (vcx >= E.coloff + content_cols)
+        E.coloff = vcx - content_cols + 1;
 }
 
 /* ── Drawing ─────────────────────────────────────────────────────────── */
@@ -124,82 +129,97 @@ static int visual_col_range_for(int filerow, int vis_anchor_row, int vis_anchor_
     return 1;
 }
 
-/* Priority (lowest → highest): syntax, bracket match, visual, search.
-   cursor_col (file coordinate, or -1) is exempted from all overlays so
-   the terminal cursor block always has a plain cell to blink over. */
+/* Render a row's content within a visual-column viewport.
+   vcol_start / vcol_count are in visual columns (tabs expanded).
+   All highlight coordinates (bm0, bm1, vis_c0, vis_c1, cursor_col)
+   remain byte offsets into row->chars.
+   cursor_col (-1 = none) is exempted from overlays so the terminal
+   cursor block always has a plain cell to blink over. */
 static void render_row_content(AppendBuf *ab, const Row *row,
-                               int coloff, int visible_len,
+                               int vcol_start, int vcol_count, int tabwidth,
                                const SearchQuery *q, int bm0, int bm1,
                                int vis_c0, int vis_c1, int cursor_col) {
-    if (visible_len <= 0) return;
+    if (vcol_count <= 0 || row->len == 0) return;
 
-    unsigned char final_hl[visible_len];
+    /* Build final_hl[row->len] — byte-indexed highlight array. */
+    unsigned char fhl[row->len];
     if (row->hl)
-        memcpy(final_hl, &row->hl[coloff], visible_len);
+        memcpy(fhl, row->hl, row->len);
     else
-        memset(final_hl, HL_NORMAL, visible_len);
+        memset(fhl, HL_NORMAL, row->len);
 
-    int bm[2] = {bm0, bm1};
-    for (int i = 0; i < 2; i++) {
-        int col = bm[i] - coloff;
-        if (col >= 0 && col < visible_len)
-            final_hl[col] = HL_BRACKET_MATCH;
+    /* Bracket match */
+    int bm[2] = { bm0, bm1 };
+    for (int k = 0; k < 2; k++) {
+        if (bm[k] >= 0 && bm[k] < row->len)
+            fhl[bm[k]] = HL_BRACKET_MATCH;
     }
 
+    /* Visual selection */
     if (vis_c0 >= 0) {
-        int vc0 = vis_c0 - coloff;
-        int vc1 = (vis_c1 == INT_MAX) ? visible_len : vis_c1 - coloff;
-        if (vc0 < 0)            vc0 = 0;
-        if (vc1 > visible_len)  vc1 = visible_len;
-        for (int i = vc0; i < vc1; i++)
-            final_hl[i] = HL_VISUAL;
+        int vc0 = vis_c0;
+        int vc1 = (vis_c1 == INT_MAX) ? row->len : vis_c1;
+        if (vc1 > row->len) vc1 = row->len;
+        for (int k = vc0; k < vc1; k++) fhl[k] = HL_VISUAL;
     }
 
+    /* Search highlight */
     if (q) {
-        int col_end = coloff + visible_len;
-        int pos     = coloff;
-        while (pos < col_end) {
+        int pos = 0;
+        while (pos < row->len) {
             int mc, ml;
             if (!q->match_fn(row->chars, row->len,
-                             q->pattern, q->pat_len, pos,
-                             &mc, &ml) || mc >= col_end)
+                             q->pattern, q->pat_len, pos, &mc, &ml))
                 break;
-            int hl_s = mc - coloff;
-            int hl_e = (mc + ml) - coloff;
-            if (hl_s < 0)            hl_s = 0;
-            if (hl_e > visible_len)  hl_e = visible_len;
-            memset(&final_hl[hl_s], HL_SEARCH, hl_e - hl_s);
-            pos = mc + ml;
+            int hs = mc, he = mc + ml;
+            if (he > row->len) he = row->len;
+            memset(&fhl[hs], HL_SEARCH, he - hs);
+            pos = (mc + ml > pos) ? mc + ml : pos + 1;
         }
     }
 
-    /* Cursor cell: clear overlays so the terminal cursor can blink visibly. */
-    if (cursor_col >= 0) {
-        int idx = cursor_col - coloff;
-        if (idx >= 0 && idx < visible_len)
-            final_hl[idx] = row->hl ? row->hl[cursor_col] : HL_NORMAL;
-    }
+    /* Cursor: revert to syntax colour so terminal cursor blinks visibly */
+    if (cursor_col >= 0 && cursor_col < row->len)
+        fhl[cursor_col] = row->hl ? row->hl[cursor_col] : HL_NORMAL;
 
-    unsigned char prev  = HL_NORMAL;
-    int           any   = 0;
-    int           i     = 0;
+    /* Render char by char, expanding tabs, clipped to the vcol viewport. */
+    unsigned char prev_hl = HL_NORMAL;
+    int any_esc = 0;
+    int vcol    = 0;   /* visual column of the current byte */
 
-    while (i < visible_len) {
-        unsigned char cur = final_hl[i];
-        int j = i + 1;
-        while (j < visible_len && final_hl[j] == cur) j++;
-        if (cur != prev) {
+    for (int i = 0; i < row->len; i++) {
+        unsigned char ch  = (unsigned char)row->chars[i];
+        unsigned char cur = fhl[i];
+        int cw = (ch == '\t') ? (tabwidth - (vcol % tabwidth)) : 1;
+        int char_end = vcol + cw;
+
+        if (char_end <= vcol_start) { vcol = char_end; continue; }
+        if (vcol >= vcol_start + vcol_count) break;
+
+        /* Visual columns of this character that fall in the viewport */
+        int out_s = (vcol < vcol_start) ? vcol_start : vcol;
+        int out_e = (char_end > vcol_start + vcol_count)
+                    ? vcol_start + vcol_count : char_end;
+        int out_n = out_e - out_s;
+
+        if (cur != prev_hl) {
             ab_append(ab, "\x1b[m", 3);
             const char *esc = hl_to_escape(cur);
             if (esc) ab_append(ab, esc, (int)strlen(esc));
-            prev = cur;
-            any  = 1;
+            prev_hl = cur;
+            any_esc = 1;
         }
-        ab_append(ab, &row->chars[coloff + i], j - i);
-        i = j;
+
+        if (ch == '\t') {
+            for (int j = 0; j < out_n; j++) ab_append(ab, " ", 1);
+        } else {
+            ab_append(ab, &row->chars[i], 1);
+        }
+
+        vcol = char_end;
     }
 
-    if (any) ab_append(ab, "\x1b[m", 3);
+    if (any_esc) ab_append(ab, "\x1b[m", 3);
 }
 
 /* Find the bracket that matches the one under the cursor (if any).
@@ -327,9 +347,6 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             }
 
             Row *row = &buf->rows[filerow];
-            int  len = row->len - pco;
-            if (len < 0) len = 0;
-            if (len > content_cols) len = content_cols;
 
             if (syn)
                 syntax_highlight_row(syn, row, row->hl_open_comment);
@@ -350,18 +367,12 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 }
             }
 
-            if (len > 0) {
-                /* Pass cursor column only for the active pane's cursor row,
-                   so the terminal cursor cell is exempt from overlay colours. */
-                int cur_col = (vis_ar >= 0 /* active */ && filerow == pcy)
-                              ? pcx : -1;
-                if (hl_q || row->hl || bm0 != -1 || bm1 != -1 ||
-                    vis_c0 != -1 || cur_col != -1)
-                    render_row_content(ab, row, pco, len, hl_q,
-                                       bm0, bm1, vis_c0, vis_c1, cur_col);
-                else
-                    ab_append(ab, &row->chars[pco], len);
-            }
+            /* Exempt cursor cell from overlays (active pane cursor row only). */
+            int cur_col = (vis_ar >= 0 && filerow == pcy) ? pcx : -1;
+
+            render_row_content(ab, row, pco, content_cols,
+                               E.opts.tabwidth, hl_q,
+                               bm0, bm1, vis_c0, vis_c1, cur_col);
         }
     }
 }
@@ -449,11 +460,13 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         else
             snprintf(pos, sizeof(pos), "%d%%", (pcy * 100) / (buf->numrows - 1));
 
+        int vpcx = (buf->numrows > 0 && pcy < buf->numrows)
+                   ? col_to_vcol(&buf->rows[pcy], pcx, E.opts.tabwidth) : pcx;
         rlen = prefix[0]
             ? snprintf(right, sizeof(right), "%s    %d,%-3d   %-4s",
-                       prefix, pcy + 1, pcx + 1, pos)
+                       prefix, pcy + 1, vpcx + 1, pos)
             : snprintf(right, sizeof(right), "%d,%-3d   %-4s",
-                       pcy + 1, pcx + 1, pos);
+                       pcy + 1, vpcx + 1, pos);
     } else {
         char pos[16];
         if (buf->numrows <= 1 || pcy == 0)
@@ -463,8 +476,10 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         else
             snprintf(pos, sizeof(pos), "%d%%", (pcy * 100) / (buf->numrows - 1));
 
+        int vpcx = (buf->numrows > 0 && pcy < buf->numrows)
+                   ? col_to_vcol(&buf->rows[pcy], pcx, E.opts.tabwidth) : pcx;
         llen = snprintf(left,  sizeof(left),  " %.30s%s", name, buf->dirty ? " [+]" : "");
-        rlen = snprintf(right, sizeof(right), "%d,%-3d   %-4s", pcy + 1, pcx + 1, pos);
+        rlen = snprintf(right, sizeof(right), "%d,%-3d   %-4s", pcy + 1, vpcx + 1, pos);
     }
 
     if (llen > p->width) llen = p->width;
@@ -635,9 +650,11 @@ void editor_refresh_screen(void) {
         len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
                        E.term_rows, E.searchlen + 2);
     } else {
+        int vcx = (E.buf.numrows > 0 && E.cy < E.buf.numrows)
+                  ? col_to_vcol(&E.buf.rows[E.cy], E.cx, E.opts.tabwidth) : 0;
         len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
                        ap->top  + (E.cy - E.rowoff),
-                       ap->left + (E.cx - E.coloff) + gutter_width());
+                       ap->left + (vcx - E.coloff) + gutter_width());
     }
     ab_append(&ab, buf, len);
     ab_append(&ab, "\x1b[?25h", 6);  /* show cursor */

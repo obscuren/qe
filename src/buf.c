@@ -7,6 +7,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+int col_to_vcol(const Row *row, int col, int tabwidth) {
+    int vcol = 0;
+    for (int i = 0; i < col && i < row->len; i++) {
+        if ((unsigned char)row->chars[i] == '\t')
+            vcol += tabwidth - (vcol % tabwidth);
+        else
+            vcol++;
+    }
+    return vcol;
+}
+
+int vcol_to_col(const Row *row, int vcol, int tabwidth) {
+    int v = 0;
+    for (int i = 0; i < row->len; i++) {
+        if (v >= vcol) return i;
+        if ((unsigned char)row->chars[i] == '\t')
+            v += tabwidth - (v % tabwidth);
+        else
+            v++;
+    }
+    return row->len;
+}
+
 void buf_mark_hl_dirty(Buffer *b, int row) {
     if (row < b->hl_dirty_from)
         b->hl_dirty_from = row;
