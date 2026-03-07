@@ -1820,6 +1820,139 @@ static int close_cur_buf(int force) {
     return 0;
 }
 
+/* ── Substitute helpers ──────────────────────────────────────────────── */
+
+/* Parse a substitute command of the form [%|N[,M]]s/pat/rep/[flags].
+   Returns 1 and fills params if it looks like a substitute command, else 0.
+   *pat and *rep point into cmd (valid while cmd is valid). */
+static int subst_parse(const char *cmd, int *r0, int *r1,
+                       const char **pat, int *pat_len,
+                       const char **rep, int *rep_len, int *global) {
+    const char *p = cmd;
+    *r0 = E.cy; *r1 = E.cy; *global = 0;
+
+    /* Optional range prefix */
+    if (*p == '%') {
+        *r0 = 0;
+        *r1 = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+        p++;
+    } else if (isdigit((unsigned char)*p)) {
+        *r0 = atoi(p) - 1;
+        while (isdigit((unsigned char)*p)) p++;
+        if (*p == ',') {
+            p++;
+            *r1 = atoi(p) - 1;
+            while (isdigit((unsigned char)*p)) p++;
+        } else {
+            *r1 = *r0;
+        }
+    }
+
+    /* Must be 's' followed by a non-alphanumeric delimiter */
+    if (*p != 's') return 0;
+    p++;
+    if (*p == '\0' || isalnum((unsigned char)*p)) return 0;
+    char delim = *p++;
+
+    /* Pattern (backslash escapes the delimiter) */
+    const char *pat_start = p;
+    while (*p && *p != delim) { if (*p == '\\' && p[1]) p++; p++; }
+    *pat = pat_start;
+    *pat_len = (int)(p - pat_start);
+    if (*p != delim) return 0;   /* unterminated */
+    p++;
+
+    /* Replacement */
+    const char *rep_start = p;
+    while (*p && *p != delim) { if (*p == '\\' && p[1]) p++; p++; }
+    *rep = rep_start;
+    *rep_len = (int)(p - rep_start);
+    if (*p == delim) p++;
+
+    /* Flags */
+    while (*p) { if (*p == 'g') *global = 1; p++; }
+    return 1;
+}
+
+/* Apply substitution to one row. Returns number of replacements made. */
+static int subst_row(Row *row, const SearchQuery *q,
+                     const char *rep, int rep_len, int global) {
+    int pos = 0, count = 0;
+    int out_cap = row->len + rep_len + 64;
+    char *out = malloc(out_cap + 1);
+    if (!out) return 0;
+    int out_len = 0;
+
+    while (pos <= row->len) {
+        int mc, ml;
+        if (!q->match_fn(row->chars, row->len,
+                         q->pattern, q->pat_len, pos, &mc, &ml)) {
+            /* No more matches: copy remainder */
+            int tail = row->len - pos;
+            if (out_len + tail + 1 > out_cap) {
+                out_cap = out_len + tail + 64;
+                char *tmp = realloc(out, out_cap + 1);
+                if (!tmp) { free(out); return count; }
+                out = tmp;
+            }
+            memcpy(out + out_len, row->chars + pos, tail);
+            out_len += tail;
+            break;
+        }
+
+        /* Grow buffer if needed */
+        int pre = mc - pos;
+        if (out_len + pre + rep_len + 1 > out_cap) {
+            out_cap = out_len + pre + rep_len + row->len + 64;
+            char *tmp = realloc(out, out_cap + 1);
+            if (!tmp) { free(out); return count; }
+            out = tmp;
+        }
+
+        /* Copy pre-match text, then replacement */
+        memcpy(out + out_len, row->chars + pos, pre); out_len += pre;
+        memcpy(out + out_len, rep, rep_len);           out_len += rep_len;
+        pos = mc + ml;
+        count++;
+
+        if (!global) {
+            /* Copy rest and stop */
+            int tail = row->len - pos;
+            if (out_len + tail + 1 > out_cap) {
+                out_cap = out_len + tail + 64;
+                char *tmp = realloc(out, out_cap + 1);
+                if (!tmp) { free(out); return count; }
+                out = tmp;
+            }
+            memcpy(out + out_len, row->chars + pos, tail);
+            out_len += tail;
+            break;
+        }
+
+        /* Guard against zero-length match infinite loop */
+        if (ml == 0) {
+            if (pos < row->len) {
+                if (out_len + 2 > out_cap) {
+                    out_cap += 64;
+                    char *tmp = realloc(out, out_cap + 1);
+                    if (!tmp) { free(out); return count; }
+                    out = tmp;
+                }
+                out[out_len++] = row->chars[pos];
+            }
+            pos++;
+        }
+    }
+
+    out[out_len] = '\0';
+    free(row->chars);
+    free(row->hl);
+    row->chars = out;
+    row->len   = out_len;
+    row->hl    = NULL;
+    return count;
+}
+
 void editor_execute_command(void) {
     const char *cmd = E.cmdbuf;
 
@@ -2152,8 +2285,71 @@ void editor_execute_command(void) {
         E.opts.line_numbers = 0;
         status_msg("Line numbers off");
 
-    } else if (cmd[0] != '\0') {
-        status_err("Not a command: %.100s", cmd);
+    } else {
+        /* ── :s / :%s / :N,Ms — substitute ──────────────────────────── */
+        const char *pat; int pat_len;
+        const char *rep; int rep_len;
+        int r0, r1, global;
+
+        if (!subst_parse(cmd, &r0, &r1, &pat, &pat_len,
+                         &rep, &rep_len, &global)) {
+            if (cmd[0] != '\0')
+                status_err("Not a command: %.100s", cmd);
+            goto done;
+        }
+
+        if (E.buf.numrows == 0) goto done;
+        if (r0 < 0) r0 = 0;
+        if (r1 >= E.buf.numrows) r1 = E.buf.numrows - 1;
+        if (r0 > r1) { status_err("Invalid range"); goto done; }
+
+        /* Empty pattern reuses last search */
+        if (pat_len == 0) {
+            if (!E.last_search_valid) { status_err("No previous pattern"); goto done; }
+            pat = E.last_query.pattern;
+            pat_len = E.last_query.pat_len;
+        }
+
+        SearchQuery q;
+        search_query_init_literal(&q, pat, pat_len);
+
+        /* Update last search so n/N work after a substitution */
+        E.last_query       = q;
+        E.last_search_valid = 1;
+        int slen = pat_len < (int)sizeof(E.searchbuf) - 1
+                   ? pat_len : (int)sizeof(E.searchbuf) - 1;
+        memcpy(E.searchbuf, pat, slen);
+        E.searchbuf[slen] = '\0';
+        E.searchlen = slen;
+
+        /* Copy replacement out of cmdbuf before it's cleared */
+        char rep_copy[512];
+        int rlen = rep_len < (int)sizeof(rep_copy) - 1
+                   ? rep_len : (int)sizeof(rep_copy) - 1;
+        memcpy(rep_copy, rep, rlen);
+        rep_copy[rlen] = '\0';
+
+        push_undo();
+
+        int total = 0;
+        int first_changed = -1;
+        for (int i = r0; i <= r1; i++) {
+            int n = subst_row(&E.buf.rows[i], &q, rep_copy, rlen, global);
+            if (n > 0) {
+                total += n;
+                E.buf.dirty++;
+                buf_mark_hl_dirty(&E.buf, i);
+                if (first_changed < 0) first_changed = i;
+            }
+        }
+
+        if (total == 0) {
+            status_err("Pattern not found: %s", q.pattern);
+        } else {
+            status_msg("%d substitution%s", total, total == 1 ? "" : "s");
+            E.cy = first_changed;
+            E.cx = 0;
+        }
     }
 
 done:
