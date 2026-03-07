@@ -184,6 +184,7 @@ typedef struct {
     /* Git integration */
     char git_branch[64];    /* current branch name (empty if not a git repo) */
     int  pending_bracket;   /* ']' or '[' waiting for second key, 0 = none  */
+    int  pending_leader_h;  /* 1 = <leader>h pressed, waiting for s/r       */
 } EditorConfig;
 
 extern EditorConfig E;

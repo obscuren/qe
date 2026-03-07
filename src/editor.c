@@ -95,6 +95,7 @@ void editor_init(void) {
 
     E.git_branch[0]    = '\0';
     E.pending_bracket  = 0;
+    E.pending_leader_h = 0;
     git_current_branch(E.git_branch, sizeof(E.git_branch));
 }
 

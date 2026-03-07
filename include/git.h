@@ -40,4 +40,24 @@ char **git_show_head(const char *filename, int *out_count);
    Returns NULL on error.  Caller must free each string and the array. */
 char **git_blame(const char *filename, int *out_count);
 
+/* A single diff hunk (line ranges are 1-based). */
+typedef struct {
+    int old_start, old_count;  /* range in old (HEAD) file */
+    int new_start, new_count;  /* range in new (working) file */
+} DiffHunk;
+
+/* Get all diff hunks between HEAD and the in-memory buffer.
+   Returns malloc'd array of DiffHunk; caller must free().
+   Sets *out_count.  Returns NULL on error or no diff. */
+DiffHunk *git_get_hunks(const char *filename,
+                        const char *const *row_chars, const int *row_lens,
+                        int numrows, int *out_count);
+
+/* Stage (add to index) a single hunk from the buffer.
+   hunk_idx is an index into the array returned by git_get_hunks.
+   Returns 1 on success, 0 on failure. */
+int git_stage_hunk(const char *filename,
+                   const char *const *row_chars, const int *row_lens,
+                   int numrows, int hunk_idx);
+
 #endif

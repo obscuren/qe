@@ -1996,6 +1996,131 @@ static void diff_open(void) {
     if (E.last_content_pane >= src_idx - 1) E.last_content_pane++;
 }
 
+/* ── Hunk operations ─────────────────────────────────────────────────── */
+
+/* Build char/int arrays from live buffer for git functions. */
+static void buf_to_arrays(const char ***out_chars, int **out_lens) {
+    const char **c = malloc(sizeof(char *) * E.buf.numrows);
+    int *l = malloc(sizeof(int) * E.buf.numrows);
+    if (c && l) {
+        for (int i = 0; i < E.buf.numrows; i++) {
+            c[i] = E.buf.rows[i].chars;
+            l[i] = E.buf.rows[i].len;
+        }
+    }
+    *out_chars = c;
+    *out_lens = l;
+}
+
+/* Find which hunk (0-based) contains cursor line cy (0-based).
+   Returns -1 if cursor is not in any hunk. */
+static int find_hunk_at_cursor(DiffHunk *hunks, int nhunks, int cy) {
+    int line1 = cy + 1;  /* 1-based */
+    for (int i = 0; i < nhunks; i++) {
+        DiffHunk *h = &hunks[i];
+        int start = h->new_start;
+        int end   = start + h->new_count - 1;
+        if (h->new_count == 0) {
+            /* Pure deletion: cursor on the line just before insertion point. */
+            if (line1 == h->new_start || line1 == h->new_start - 1)
+                return i;
+        } else if (line1 >= start && line1 <= end) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void hunk_stage(void) {
+    if (!E.buf.filename || E.buf.numrows <= 0) {
+        status_err("No file to stage"); return;
+    }
+    const char **chars; int *lens;
+    buf_to_arrays(&chars, &lens);
+    if (!chars || !lens) { free(chars); free(lens); return; }
+
+    int nhunks = 0;
+    DiffHunk *hunks = git_get_hunks(E.buf.filename, chars, lens,
+                                    E.buf.numrows, &nhunks);
+    if (!hunks) {
+        free(chars); free(lens);
+        status_err("No changes to stage"); return;
+    }
+
+    int idx = find_hunk_at_cursor(hunks, nhunks, E.cy);
+    if (idx < 0) {
+        free(hunks); free(chars); free(lens);
+        status_err("Cursor not on a changed hunk"); return;
+    }
+
+    int ok = git_stage_hunk(E.buf.filename, chars, lens, E.buf.numrows, idx);
+    free(hunks); free(chars); free(lens);
+
+    if (ok) {
+        snprintf(E.statusmsg, sizeof(E.statusmsg), "Hunk staged");
+        E.statusmsg_is_error = 0;
+        editor_update_git_signs();
+    } else {
+        status_err("Failed to stage hunk");
+    }
+}
+
+static void hunk_revert(void) {
+    if (!E.buf.filename || E.buf.numrows <= 0) {
+        status_err("No file to revert"); return;
+    }
+    const char **chars; int *lens;
+    buf_to_arrays(&chars, &lens);
+    if (!chars || !lens) { free(chars); free(lens); return; }
+
+    int nhunks = 0;
+    DiffHunk *hunks = git_get_hunks(E.buf.filename, chars, lens,
+                                    E.buf.numrows, &nhunks);
+    free(chars); free(lens);
+    if (!hunks) { status_err("No changes to revert"); return; }
+
+    int idx = find_hunk_at_cursor(hunks, nhunks, E.cy);
+    if (idx < 0) {
+        free(hunks); status_err("Cursor not on a changed hunk"); return;
+    }
+
+    DiffHunk h = hunks[idx];
+    free(hunks);
+
+    /* Get HEAD version of the file. */
+    int head_count = 0;
+    char **head_lines = git_show_head(E.buf.filename, &head_count);
+    if (!head_lines) { status_err("Cannot read HEAD version"); return; }
+
+    /* Push undo before modifying buffer. */
+    push_undo();
+
+    /* Delete new lines from buffer (new_start is 1-based). */
+    int del_from = h.new_start - 1;  /* 0-based */
+    for (int i = 0; i < h.new_count && del_from < E.buf.numrows; i++)
+        buf_delete_row(&E.buf, del_from);
+
+    /* Insert old lines from HEAD. */
+    for (int i = 0; i < h.old_count; i++) {
+        int src = h.old_start - 1 + i;  /* 0-based index into head_lines */
+        if (src >= 0 && src < head_count) {
+            int len = (int)strlen(head_lines[src]);
+            buf_insert_row(&E.buf, del_from + i, head_lines[src], len);
+        }
+    }
+
+    for (int i = 0; i < head_count; i++) free(head_lines[i]);
+    free(head_lines);
+
+    /* Reposition cursor. */
+    if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+    if (E.cy < 0) E.cy = 0;
+
+    editor_update_git_signs();
+    snprintf(E.statusmsg, sizeof(E.statusmsg), "Hunk reverted");
+    E.statusmsg_is_error = 0;
+}
+
 /* ── Quickfix pane ───────────────────────────────────────────────────── */
 
 static int qf_pane_idx(void) {
@@ -2773,6 +2898,14 @@ void editor_execute_command(void) {
         diff_open();
         goto done;
 
+    /* ── :Gstage / :Grevert — hunk operations ──────────────────────── */
+    } else if (strcmp(cmd, "Gstage") == 0 || strcmp(cmd, "gstage") == 0) {
+        hunk_stage();
+        goto done;
+    } else if (strcmp(cmd, "Grevert") == 0 || strcmp(cmd, "grevert") == 0) {
+        hunk_revert();
+        goto done;
+
     /* ── :Gblame ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "Gblame") == 0 || strcmp(cmd, "gblame") == 0) {
         blame_open();
@@ -3172,9 +3305,22 @@ static void editor_process_normal(int c) {
         return;
     }
 
+    /* Pending <leader>h — git hunk operation: s=stage, r=revert. */
+    if (E.pending_leader_h) {
+        E.pending_leader_h = 0;
+        if (c == 's')      hunk_stage();
+        else if (c == 'r') hunk_revert();
+        else               status_err("Unknown hunk command: h%c", (char)c);
+        return;
+    }
+
     /* Pending leader key sequence. */
     if (E.pending_leader) {
         E.pending_leader = 0;
+        if (c == 'h') {
+            E.pending_leader_h = 1;
+            return;
+        }
         if (!lua_bridge_call_key(MODE_NORMAL, LEADER_BASE + c))
             status_err("No mapping for <leader>%c", (char)c);
         return;

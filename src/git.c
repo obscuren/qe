@@ -263,6 +263,193 @@ void git_diff_signs_both(const char *filename,
     *out_old_signs = os;
 }
 
+/* ── Hunk operations ─────────────────────────────────────────────────── */
+
+/* Helper: write buffer rows to a temp file, return fd (caller closes). */
+static int write_buf_to_tmp(const char *template,
+                            const char *const *chars, const int *lens,
+                            int numrows, char *path, int pathlen) {
+    snprintf(path, pathlen, "%s", template);
+    int fd = mkstemp(path);
+    if (fd < 0) return -1;
+    for (int i = 0; i < numrows; i++) {
+        if (lens[i] > 0) write(fd, chars[i], lens[i]);
+        write(fd, "\n", 1);
+    }
+    close(fd);
+    return 0;
+}
+
+/* Helper: write HEAD version to a temp file via git show. */
+static int write_head_to_tmp(const char *filename, char *path, int pathlen) {
+    snprintf(path, pathlen, "/tmp/qe_hold_XXXXXX");
+    int fd = mkstemp(path);
+    if (fd < 0) return -1;
+    close(fd);
+
+    char qfile[1024], qpath[256];
+    shell_quote(filename, qfile, sizeof(qfile));
+    shell_quote(path, qpath, sizeof(qpath));
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "git show HEAD:%s > %s 2>/dev/null", qfile, qpath);
+    int rc = system(cmd);
+    return (rc == 0) ? 0 : -1;
+}
+
+DiffHunk *git_get_hunks(const char *filename,
+                        const char *const *row_chars, const int *row_lens,
+                        int numrows, int *out_count) {
+    *out_count = 0;
+    if (!filename || numrows <= 0) return NULL;
+
+    char tmp_new[64] = "/tmp/qe_hnew_XXXXXX";
+    char tmp_old[64];
+    if (write_buf_to_tmp(tmp_new, row_chars, row_lens, numrows,
+                         tmp_new, sizeof(tmp_new)) < 0)
+        return NULL;
+    if (write_head_to_tmp(filename, tmp_old, sizeof(tmp_old)) < 0) {
+        unlink(tmp_new); return NULL;
+    }
+
+    char q_old[256], q_new[256];
+    shell_quote(tmp_old, q_old, sizeof(q_old));
+    shell_quote(tmp_new, q_new, sizeof(q_new));
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "diff -U0 -- %s %s 2>/dev/null", q_old, q_new);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { unlink(tmp_old); unlink(tmp_new); return NULL; }
+
+    int cap = 16, count = 0;
+    DiffHunk *hunks = malloc(sizeof(DiffHunk) * cap);
+    if (!hunks) { pclose(fp); unlink(tmp_old); unlink(tmp_new); return NULL; }
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        if (line[0] != '@' || line[1] != '@') continue;
+        DiffHunk h;
+        if (!parse_hunk(line, &h.old_start, &h.old_count,
+                        &h.new_start, &h.new_count))
+            continue;
+        if (count >= cap) {
+            cap *= 2;
+            DiffHunk *tmp = realloc(hunks, sizeof(DiffHunk) * cap);
+            if (!tmp) break;
+            hunks = tmp;
+        }
+        hunks[count++] = h;
+    }
+    pclose(fp);
+    unlink(tmp_old);
+    unlink(tmp_new);
+
+    if (count == 0) { free(hunks); return NULL; }
+    *out_count = count;
+    return hunks;
+}
+
+int git_stage_hunk(const char *filename,
+                   const char *const *row_chars, const int *row_lens,
+                   int numrows, int hunk_idx) {
+    if (!filename || numrows <= 0) return 0;
+
+    /* Write buffer and HEAD to temp files. */
+    char tmp_new[64] = "/tmp/qe_snew_XXXXXX";
+    char tmp_old[64];
+    if (write_buf_to_tmp(tmp_new, row_chars, row_lens, numrows,
+                         tmp_new, sizeof(tmp_new)) < 0)
+        return 0;
+    if (write_head_to_tmp(filename, tmp_old, sizeof(tmp_old)) < 0) {
+        unlink(tmp_new); return 0;
+    }
+
+    /* Get full diff with context=0 and line content. */
+    char q_old[256], q_new[256];
+    shell_quote(tmp_old, q_old, sizeof(q_old));
+    shell_quote(tmp_new, q_new, sizeof(q_new));
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "diff -U0 -- %s %s 2>/dev/null", q_old, q_new);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { unlink(tmp_old); unlink(tmp_new); return 0; }
+
+    /* Collect full diff output. */
+    char *diffbuf = NULL;
+    size_t diffsz = 0;
+    {
+        char chunk[4096];
+        size_t cap = 0;
+        while (fgets(chunk, sizeof(chunk), fp)) {
+            size_t len = strlen(chunk);
+            if (diffsz + len + 1 > cap) {
+                cap = (diffsz + len + 1) * 2;
+                char *tmp = realloc(diffbuf, cap);
+                if (!tmp) break;
+                diffbuf = tmp;
+            }
+            memcpy(diffbuf + diffsz, chunk, len);
+            diffsz += len;
+        }
+        if (diffbuf) diffbuf[diffsz] = '\0';
+    }
+    pclose(fp);
+
+    if (!diffbuf) { unlink(tmp_old); unlink(tmp_new); return 0; }
+
+    /* Parse to find the target hunk and extract its lines. */
+    int cur_hunk = -1;
+    const char *hunk_start = NULL;
+    const char *hunk_end   = NULL;
+
+    const char *p = diffbuf;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        if (!nl) nl = p + strlen(p);
+
+        if (p[0] == '@' && p[1] == '@') {
+            /* New hunk header — close previous hunk. */
+            if (cur_hunk == hunk_idx) {
+                hunk_end = p;
+                break;
+            }
+            cur_hunk++;
+            if (cur_hunk == hunk_idx) hunk_start = p;
+        }
+
+        p = (*nl) ? nl + 1 : nl;
+    }
+    if (cur_hunk == hunk_idx && !hunk_end) hunk_end = diffbuf + diffsz;
+
+    int ok = 0;
+    if (hunk_start && hunk_end && hunk_end > hunk_start) {
+        /* Build a patch file:
+           --- a/filename
+           +++ b/filename
+           <hunk header + lines> */
+        char patch_path[] = "/tmp/qe_patch_XXXXXX";
+        int pfd = mkstemp(patch_path);
+        if (pfd >= 0) {
+            dprintf(pfd, "--- a/%s\n+++ b/%s\n", filename, filename);
+            write(pfd, hunk_start, hunk_end - hunk_start);
+            close(pfd);
+
+            char qpatch[256];
+            shell_quote(patch_path, qpatch, sizeof(qpatch));
+            char acmd[1024];
+            snprintf(acmd, sizeof(acmd),
+                     "git apply --cached --unidiff-zero %s 2>/dev/null", qpatch);
+            ok = (system(acmd) == 0);
+            unlink(patch_path);
+        }
+    }
+
+    free(diffbuf);
+    unlink(tmp_old);
+    unlink(tmp_new);
+    return ok;
+}
+
 /* ── Show HEAD ───────────────────────────────────────────────────────── */
 
 char **git_show_head(const char *filename, int *out_count) {
