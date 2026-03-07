@@ -36,11 +36,13 @@ void buf_mark_hl_dirty(Buffer *b, int row) {
 }
 
 void buf_init(Buffer *b) {
-    b->rows          = NULL;
-    b->numrows       = 0;
-    b->filename      = NULL;
-    b->dirty         = 0;
-    b->hl_dirty_from = INT_MAX;
+    b->rows            = NULL;
+    b->numrows         = 0;
+    b->filename        = NULL;
+    b->dirty           = 0;
+    b->hl_dirty_from   = INT_MAX;
+    b->git_signs       = NULL;
+    b->git_signs_count = 0;
 }
 
 void buf_free(Buffer *b) {
@@ -50,6 +52,7 @@ void buf_free(Buffer *b) {
     }
     free(b->rows);
     free(b->filename);
+    free(b->git_signs);
     buf_init(b);
 }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "editor.h"
+#include "git.h"
 #include "terminal.h"
 #include "utils.h"
 
@@ -91,11 +92,35 @@ void editor_init(void) {
 
     E.num_buftabs = 1;
     E.cur_buftab  = 0;
+
+    E.git_branch[0]    = '\0';
+    E.pending_bracket  = 0;
+    git_current_branch(E.git_branch, sizeof(E.git_branch));
 }
 
 void editor_detect_syntax(void) {
     E.syntax             = syntax_detect(E.buf.filename);
     E.buf.hl_dirty_from  = 0;   /* force full open-comment recompute */
+}
+
+void editor_update_git_signs(void) {
+    free(E.buf.git_signs);
+    E.buf.git_signs       = NULL;
+    E.buf.git_signs_count = 0;
+    if (!E.buf.filename || E.buf.numrows <= 0) return;
+
+    /* Build temporary arrays for the git module. */
+    const char **chars = malloc(sizeof(char *) * E.buf.numrows);
+    int         *lens  = malloc(sizeof(int)    * E.buf.numrows);
+    if (!chars || !lens) { free(chars); free(lens); return; }
+    for (int i = 0; i < E.buf.numrows; i++) {
+        chars[i] = E.buf.rows[i].chars;
+        lens[i]  = E.buf.rows[i].len;
+    }
+    E.buf.git_signs = git_diff_signs(E.buf.filename, chars, lens, E.buf.numrows);
+    E.buf.git_signs_count = E.buf.git_signs ? E.buf.numrows : 0;
+    free(chars);
+    free(lens);
 }
 
 UndoState editor_capture_state(void) {

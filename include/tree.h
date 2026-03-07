@@ -15,6 +15,8 @@ typedef struct {
     int  is_dir;
     int  depth;
     int  expanded;
+    char git_status;            /* ' '=clean, 'M'=modified, '?'=untracked,
+                                   'A'=added, 'D'=deleted                  */
 } TreeEntry;
 
 typedef struct {
@@ -32,5 +34,9 @@ void tree_toggle(TreeState *ts, int idx);
 
 /* Render ts into buf rows (clears previous rows; preserves buf->filename). */
 void tree_render_to_buf(const TreeState *ts, Buffer *buf);
+
+/* Populate git_status for every entry using `git status --porcelain`.
+   Also propagates status up to parent directories. */
+void tree_update_git_status(TreeState *ts);
 
 #endif

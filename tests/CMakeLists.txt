@@ -13,6 +13,7 @@ add_executable(test_undo
     ${CMAKE_SOURCE_DIR}/src/undo.c
     ${CMAKE_SOURCE_DIR}/src/buf.c
     ${CMAKE_SOURCE_DIR}/src/editor.c
+    ${CMAKE_SOURCE_DIR}/src/git.c
     ${CMAKE_SOURCE_DIR}/src/syntax.c
     ${CMAKE_SOURCE_DIR}/src/terminal.c
     ${CMAKE_SOURCE_DIR}/src/utils.c

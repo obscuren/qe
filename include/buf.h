@@ -15,6 +15,8 @@ typedef struct {
     char  *filename;
     int    dirty;           /* non-zero when there are unsaved changes */
     int    hl_dirty_from;   /* rows >= this need hl_open_comment recomputed */
+    char  *git_signs;       /* per-row diff sign (GIT_SIGN_*), or NULL      */
+    int    git_signs_count; /* length of git_signs array                    */
 } Buffer;
 
 void buf_init(Buffer *b);

@@ -93,6 +93,61 @@ void tree_toggle(TreeState *ts, int idx) {
     tree_refresh(ts);
 }
 
+/* ── Git status integration ──────────────────────────────────────────── */
+
+/* Convert the two-char XY from `git status --porcelain` to a single display char. */
+static char git_xy_to_status(char x, char y) {
+    if (x == '?' && y == '?') return '?';
+    if (x == 'A' || y == 'A') return 'A';
+    if (x == 'D' || y == 'D') return 'D';
+    if (x == 'M' || y == 'M' || x == 'R' || x == 'T') return 'M';
+    return ' ';
+}
+
+void tree_update_git_status(TreeState *ts) {
+    /* Reset all to clean. */
+    for (int i = 0; i < ts->count; i++)
+        ts->entries[i].git_status = ' ';
+
+    FILE *fp = popen("git status --porcelain 2>/dev/null", "r");
+    if (!fp) return;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+        if (len < 4) continue;   /* "XY path" minimum */
+
+        char x = line[0], y = line[1];
+        /* line[2] is a space; path starts at line[3]. */
+        const char *rel = line + 3;
+        char status = git_xy_to_status(x, y);
+        if (status == ' ') continue;
+
+        /* Build absolute path: root/rel */
+        char abs_path[TREE_PATH_MAX + TREE_PATH_MAX];
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", ts->root, rel);
+
+        /* Match against tree entries. */
+        for (int i = 0; i < ts->count; i++) {
+            TreeEntry *e = &ts->entries[i];
+            if (e->is_dir) {
+                /* Directory matches if abs_path starts with entry path + '/' */
+                int plen = (int)strlen(e->path);
+                if (strncmp(abs_path, e->path, plen) == 0 &&
+                    (abs_path[plen] == '/' || abs_path[plen] == '\0')) {
+                    if (e->git_status == ' ') e->git_status = status;
+                }
+            } else {
+                if (strcmp(abs_path, e->path) == 0)
+                    e->git_status = status;
+            }
+        }
+    }
+    pclose(fp);
+}
+
 void tree_render_to_buf(const TreeState *ts, Buffer *buf) {
     /* Free all existing rows but preserve filename. */
     for (int i = 0; i < buf->numrows; i++) {

@@ -2,6 +2,7 @@
 #include "render.h"
 #include "editor.h"
 #include "fuzzy.h"
+#include "git.h"
 #include "qf.h"
 #include "search.h"
 #include "syntax.h"
@@ -51,13 +52,15 @@ static char mark_char_at(int buf_idx, int row) {
 }
 
 /* Width of the line-number gutter for a specific buffer.
-   When marks exist for that buffer, prepends 2 extra columns (mark + space). */
+   When marks exist for that buffer, prepends 2 extra columns (mark + space).
+   When git signs exist, prepends 1 extra column. */
 static int gutter_width_for(const Buffer *buf, int buf_idx) {
     if (!E.opts.line_numbers || buf->numrows == 0) return 0;
     int n = buf->numrows, w = 0;
     while (n > 0) { w++; n /= 10; }
     w++;  /* trailing space */
     if (buf_has_marks(buf_idx)) w += 2;
+    if (buf->git_signs) w += 1;
     return w;
 }
 
@@ -396,6 +399,34 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             continue;
         }
 
+        /* Tree pane: colour filenames by git status. */
+        if (is_tree && filerow < buf->numrows) {
+            TreeState *ts = E.buftabs[p->buf_idx].tree;
+            int is_sel = (filerow == pcy);
+            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+
+            Row *row = &buf->rows[filerow];
+            int avail = p->width;
+            int rlen = row->len < avail ? row->len : avail;
+
+            /* Entry index: row 0 = root line, row i+1 = entries[i]. */
+            int eidx = filerow - 1;
+            char gs = ' ';
+            if (ts && eidx >= 0 && eidx < ts->count)
+                gs = ts->entries[eidx].git_status;
+
+            if (gs == '?' || gs == 'A')
+                ab_append(ab, "\x1b[32m", 5);      /* green */
+            else if (gs == 'M')
+                ab_append(ab, "\x1b[33m", 5);      /* yellow */
+            else if (gs == 'D')
+                ab_append(ab, "\x1b[31m", 5);      /* red */
+
+            ab_append(ab, row->chars, rlen);
+            ab_append(ab, "\x1b[m", 3);
+            continue;
+        }
+
         if (buf->numrows == 0) {
             /* Empty buffer: splash only for single-pane active. */
             if (p->width > 1) {
@@ -419,10 +450,22 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         } else {
             /* Gutter */
             if (gw > 0) {
+                int has_git = (buf->git_signs != NULL);
                 char num[16];
                 int  nlen = snprintf(num, sizeof(num), "%d", filerow + 1);
-                int  num_gw = gw - (has_marks ? 2 : 0); /* digits+space portion */
+                int  num_gw = gw - (has_marks ? 2 : 0) - (has_git ? 1 : 0);
                 int  pad  = num_gw - 1 - nlen;
+
+                /* Git sign column (single char: +/~/- or space). */
+                if (has_git) {
+                    char gs = (filerow < buf->git_signs_count)
+                              ? buf->git_signs[filerow] : ' ';
+                    if (gs == '+')      ab_append(ab, "\x1b[32m+\x1b[m", 10);
+                    else if (gs == '~') ab_append(ab, "\x1b[33m~\x1b[m", 10);
+                    else if (gs == '-') ab_append(ab, "\x1b[31m-\x1b[m", 10);
+                    else                ab_append(ab, " ", 1);
+                }
+
                 ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
                 if (has_marks) {
                     char mc = mark_char_at(p->buf_idx, filerow);
@@ -550,7 +593,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
     ab_append(ab, erase, elen);
 
-    char left[128], right[32];
+    char left[196], right[32];
     const char *name = buf->filename ? buf->filename : "[No Name]";
 
     int llen, rlen;
@@ -559,8 +602,11 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         if (E.num_buftabs > 1)
             snprintf(bufnum, sizeof(bufnum), " [%d/%d]",
                      E.cur_buftab + 1, E.num_buftabs);
-        llen = snprintf(left, sizeof(left), " %.30s%s%s",
-                        name, buf->dirty ? " [+]" : "", bufnum);
+        char branch[80] = "";
+        if (E.git_branch[0])
+            snprintf(branch, sizeof(branch), "  %s", E.git_branch);
+        llen = snprintf(left, sizeof(left), " %.30s%s%s%s",
+                        name, buf->dirty ? " [+]" : "", bufnum, branch);
         char prefix[16] = "";
         if (E.count > 0 && E.pending_op)
             snprintf(prefix, sizeof(prefix), "%d%c", E.count, E.pending_op);

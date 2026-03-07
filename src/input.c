@@ -2,6 +2,7 @@
 #include "input.h"
 #include "editor.h"
 #include "fuzzy.h"
+#include "git.h"
 #include "qf.h"
 #include "lua_bridge.h"
 #include "search.h"
@@ -1437,6 +1438,7 @@ static void tree_activate_entry(void) {
             E.cx = 0; E.cy = 0; E.rowoff = 0; E.coloff = 0;
             buf_open(&E.buf, fname);
             editor_detect_syntax();
+            editor_update_git_signs();
             status_msg("\"%s\"", E.buf.filename ? E.buf.filename : fname);
         }
         free(fname);
@@ -1462,6 +1464,7 @@ static void tree_handle_key(int c) {
             if (ts) {
                 ts->show_hidden ^= 1;
                 tree_refresh(ts);
+                tree_update_git_status(ts);
                 tree_render_to_buf(ts, &E.buf);
                 if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
             }
@@ -1469,6 +1472,7 @@ static void tree_handle_key(int c) {
         case 'r':   /* refresh from disk */
             if (ts) {
                 tree_refresh(ts);
+                tree_update_git_status(ts);
                 tree_render_to_buf(ts, &E.buf);
                 if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
             }
@@ -1576,6 +1580,7 @@ static void editor_open_tree_pane(void) {
     buf_init(&E.buftabs[tidx].buf);
     E.buftabs[tidx].buf.filename = strdup(ts->root);
     tree_refresh(ts);
+    tree_update_git_status(ts);
     tree_render_to_buf(ts, &E.buftabs[tidx].buf);
 
     /* Save the current live content buffer. */
@@ -2002,6 +2007,7 @@ static int open_new_buf(const char *filename) {
     if (filename) {
         buf_open(&E.buf, filename);
         editor_detect_syntax();
+        editor_update_git_signs();
         status_msg("\"%s\"", E.buf.filename ? E.buf.filename : filename);
     }
     return 1;
@@ -2292,6 +2298,7 @@ void editor_execute_command(void) {
                         goto done;
                     }
                     if (buf_save(&E.buf) == 0) {
+                        editor_update_git_signs();
                         if (!dq) status_msg("\"%s\" written", E.buf.filename);
                     } else {
                         status_err("Cannot write \"%s\"", E.buf.filename);
@@ -2531,6 +2538,7 @@ void editor_execute_command(void) {
             E.rowoff = 0; E.coloff = 0;
             buf_open(&E.buf, fname);
             editor_detect_syntax();
+            editor_update_git_signs();
             status_msg("\"%s\"", E.buf.filename);
         }
         free(fname);
@@ -2754,6 +2762,48 @@ static void editor_process_normal(int c) {
         return;
     }
 
+    /* ] / [ second-key dispatch (hunk navigation). */
+    if (E.pending_bracket) {
+        int dir = E.pending_bracket;   /* ']' or '[' */
+        E.pending_bracket = 0;
+        if (c == 'c') {
+            /* ]c / [c — jump to next/previous git hunk. */
+            if (!E.buf.git_signs) { status_err("No git diff info"); return; }
+            int n = E.count > 0 ? E.count : 1;
+            E.count = 0;
+            int row = E.cy;
+            if (dir == ']') {
+                for (int rep = 0; rep < n; rep++) {
+                    /* Skip current hunk. */
+                    while (row < E.buf.numrows - 1 &&
+                           E.buf.git_signs[row] != GIT_SIGN_NONE) row++;
+                    /* Find start of next hunk. */
+                    while (row < E.buf.numrows - 1 &&
+                           E.buf.git_signs[row] == GIT_SIGN_NONE) row++;
+                }
+            } else {
+                for (int rep = 0; rep < n; rep++) {
+                    /* Step back off current hunk. */
+                    while (row > 0 &&
+                           E.buf.git_signs[row] != GIT_SIGN_NONE) row--;
+                    /* Scan back to find a hunk. */
+                    while (row > 0 &&
+                           E.buf.git_signs[row] == GIT_SIGN_NONE) row--;
+                    /* Walk to start of that hunk. */
+                    while (row > 0 &&
+                           E.buf.git_signs[row - 1] != GIT_SIGN_NONE) row--;
+                }
+            }
+            if (row != E.cy && E.buf.git_signs[row] != GIT_SIGN_NONE) {
+                E.cy = row;
+                E.cx = 0;
+                s_vertical_move = 1;
+                apply_preferred_col();
+            }
+        }
+        return;
+    }
+
     /* Pending leader key sequence. */
     if (E.pending_leader) {
         E.pending_leader = 0;
@@ -2957,10 +3007,12 @@ static void editor_process_normal(int c) {
         /* --- undo / redo (n times) --- */
         case 'u':
             for (int i = 0; i < n; i++) editor_undo();
+            editor_update_git_signs();
             break;
 
         case 'r':
             for (int i = 0; i < n; i++) editor_redo();
+            editor_update_git_signs();
             break;
 
         /* --- search repeat (n times) --- */
@@ -3252,6 +3304,12 @@ static void editor_process_normal(int c) {
             E.pending_g = 1;
             break;
 
+        /* --- ] / [ prefix (hunk navigation) --- */
+        case ']':
+        case '[':
+            E.pending_bracket = c;
+            break;
+
         /* --- marks --- */
         case 'm':
             E.pending_mark = 'm';
@@ -3365,6 +3423,7 @@ static void editor_process_insert(int c) {
                 }
                 E.has_pre_insert = 0;
             }
+            editor_update_git_signs();
             break;
 
         case '\r':

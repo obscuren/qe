@@ -176,12 +176,17 @@ typedef struct {
 
     /* Fuzzy finder overlay */
     FuzzyState fuzzy;
+
+    /* Git integration */
+    char git_branch[64];    /* current branch name (empty if not a git repo) */
+    int  pending_bracket;   /* ']' or '[' waiting for second key, 0 = none  */
 } EditorConfig;
 
 extern EditorConfig E;
 
 void editor_init(void);
 void editor_detect_syntax(void);
+void editor_update_git_signs(void);
 
 UndoState editor_capture_state(void);
 void      editor_restore_state(const UndoState *s);
