@@ -60,6 +60,10 @@ static int l_set_option(lua_State *LS) {
         const char *v = luaL_checkstring(LS, 2);
         if (v[0] && !v[1]) E.leader_char = v[0];
         else luaL_error(LS, "leader must be a single character");
+    } else if (strcmp(name, "fuzzy_width_pct") == 0) {
+        int p = (int)luaL_checkinteger(LS, 2);
+        if (p >= 10 && p <= 100) E.opts.fuzzy_width_pct = p;
+        else luaL_error(LS, "fuzzy_width_pct must be 10-100");
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }

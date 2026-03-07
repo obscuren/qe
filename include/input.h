@@ -22,5 +22,6 @@ int  editor_read_key(void);
 void editor_process_keypress(void);
 void editor_execute_command(void);
 void editor_open_tree(void);    /* open (or toggle) the file-tree sidebar */
+void editor_open_fuzzy(void);   /* open the fuzzy file finder overlay     */
 
 #endif

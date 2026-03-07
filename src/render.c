@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render.h"
 #include "editor.h"
+#include "fuzzy.h"
 #include "search.h"
 #include "syntax.h"
 
@@ -33,16 +34,34 @@ static void ab_free(AppendBuf *ab) {
 
 /* ── Gutter ──────────────────────────────────────────────────────────── */
 
-/* Width of the line-number gutter for a specific buffer. */
-static int gutter_width_for(const Buffer *buf) {
+/* Returns 1 if any mark exists for the given buffer slot. */
+static int buf_has_marks(int buf_idx) {
+    for (int i = 0; i < MARK_MAX; i++)
+        if (E.marks[i].valid && E.marks[i].buf_idx == buf_idx) return 1;
+    return 0;
+}
+
+/* Returns the mark letter for a given row/buf, or 0 if none. */
+static char mark_char_at(int buf_idx, int row) {
+    for (int i = 0; i < MARK_MAX; i++)
+        if (E.marks[i].valid && E.marks[i].buf_idx == buf_idx && E.marks[i].row == row)
+            return 'a' + i;
+    return 0;
+}
+
+/* Width of the line-number gutter for a specific buffer.
+   When marks exist for that buffer, prepends 2 extra columns (mark + space). */
+static int gutter_width_for(const Buffer *buf, int buf_idx) {
     if (!E.opts.line_numbers || buf->numrows == 0) return 0;
     int n = buf->numrows, w = 0;
     while (n > 0) { w++; n /= 10; }
-    return w + 1;
+    w++;  /* trailing space */
+    if (buf_has_marks(buf_idx)) w += 2;
+    return w;
 }
 
 /* Gutter width for the active (live) buffer. */
-static int gutter_width(void) { return gutter_width_for(&E.buf); }
+static int gutter_width(void) { return gutter_width_for(&E.buf, E.cur_buftab); }
 
 /* ── Scroll ──────────────────────────────────────────────────────────── */
 
@@ -291,7 +310,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                            int vis_ar, int vis_ac,
                            int bm_valid, int bm_row, int bm_col) {
     int is_tree      = E.buftabs[p->buf_idx].is_tree;
-    int gw           = is_tree ? 0 : gutter_width_for(buf);
+    int gw           = is_tree ? 0 : gutter_width_for(buf, p->buf_idx);
+    int has_marks    = is_tree ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
 
     /* Cascade hl_open_comment for dirty rows. */
@@ -338,8 +358,20 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             if (gw > 0) {
                 char num[16];
                 int  nlen = snprintf(num, sizeof(num), "%d", filerow + 1);
-                int  pad  = gw - 1 - nlen;
+                int  num_gw = gw - (has_marks ? 2 : 0); /* digits+space portion */
+                int  pad  = num_gw - 1 - nlen;
                 ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
+                if (has_marks) {
+                    char mc = mark_char_at(p->buf_idx, filerow);
+                    if (mc) {
+                        ab_append(ab, "\x1b[33m", 5); /* yellow mark char */
+                        ab_append(ab, &mc, 1);
+                        ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
+                    } else {
+                        ab_append(ab, " ", 1);
+                    }
+                    ab_append(ab, " ", 1);
+                }
                 while (pad-- > 0) ab_append(ab, " ", 1);
                 ab_append(ab, num, nlen);
                 ab_append(ab, " ", 1);
@@ -517,6 +549,161 @@ static void draw_dividers(AppendBuf *ab) {
     }
 }
 
+/* ── Fuzzy finder overlay ─────────────────────────────────────────────── */
+
+static void fuzzy_draw(AppendBuf *ab) {
+    FuzzyState *f = &E.fuzzy;
+
+    /* Panel dimensions. */
+    int width = E.term_cols * E.opts.fuzzy_width_pct / 100;
+    if (width < 40)              width = 40;
+    if (width > E.term_cols - 2) width = E.term_cols - 2;
+    int inner = width - 2;  /* visual columns between the side borders */
+
+    /* height: top border + search + separator + results + separator + footer + bottom */
+    int height = FUZZY_MAX_VIS + 6;
+    if (height > E.term_rows - 2) height = E.term_rows - 2;
+
+    int top  = (E.term_rows - height) / 2 + 1;  /* 1-based */
+    int left = (E.term_cols - width)  / 2 + 1;  /* 1-based */
+
+    char mv[32];
+    int  mvlen;
+
+    for (int y = 0; y < height; y++) {
+        mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;%dH", top + y, left);
+        ab_append(ab, mv, mvlen);
+
+        if (y == 0) {
+            /* ── Top border ─────────────────────────────────────── */
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "┌", 3);
+            for (int x = 0; x < inner; x++) ab_append(ab, "─", 3);
+            ab_append(ab, "┐", 3);
+
+        } else if (y == 1) {
+            /* ── Search input row ───────────────────────────────── */
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "│", 3);
+            ab_append(ab, " ", 1);
+            ab_append(ab, "\x1b[33m",   5);  /* dark yellow: "search:" */
+            ab_append(ab, "search:",    7);
+            ab_append(ab, "\x1b[1;37m", 7);  /* bold white: " > " */
+            ab_append(ab, " > ",        3);
+            ab_append(ab, "\x1b[m",     3);
+
+            /* Query text — show tail if it overflows. */
+            int avail  = inner - 1 - 7 - 3;  /* space + "search:" + " > " */
+            int qstart = (f->query_len > avail) ? f->query_len - avail : 0;
+            int qshow  = f->query_len - qstart;
+            ab_append(ab, f->query + qstart, qshow);
+            int pad = avail - qshow;
+            while (pad-- > 0) ab_append(ab, " ", 1);
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "│", 3);
+
+        } else if (y == 2 || y == height - 3) {
+            /* ── Separator ──────────────────────────────────────── */
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "├", 3);
+            for (int x = 0; x < inner; x++) ab_append(ab, "─", 3);
+            ab_append(ab, "┤", 3);
+
+        } else if (y == height - 1) {
+            /* ── Bottom border ──────────────────────────────────── */
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "└", 3);
+            for (int x = 0; x < inner; x++) ab_append(ab, "─", 3);
+            ab_append(ab, "┘", 3);
+
+        } else if (y == height - 2) {
+            /* ── Footer ─────────────────────────────────────────── */
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "│", 3);
+            ab_append(ab, " ", 1);
+            ab_append(ab, "\x1b[2m", 4);  /* dim */
+            char count_str[32];
+            int  clen = snprintf(count_str, sizeof(count_str),
+                                 "%d / %d", f->match_count, f->all_count);
+            ab_append(ab, count_str, clen);
+            /* Hints right-aligned. */
+            const char *hints = "<Enter> open  <C-x> sp  <C-v> vsp  <Esc> close";
+            int hlen = (int)strlen(hints);
+            int gap  = inner - 1 - clen - hlen;
+            if (gap > 0) {
+                while (gap-- > 0) ab_append(ab, " ", 1);
+                ab_append(ab, hints, hlen);
+            } else {
+                int p = inner - 1 - clen;
+                while (p-- > 0) ab_append(ab, " ", 1);
+            }
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "│", 3);
+
+        } else {
+            /* ── Result row ─────────────────────────────────────── */
+            int ridx = (y - 3) + f->scroll;   /* y==3 → first result */
+            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, "│", 3);
+            ab_append(ab, " ", 1);
+
+            int avail = inner - 2;  /* 1 leading space + 1 trailing space */
+            if (ridx < f->match_count) {
+                FuzzyMatch *m  = &f->matches[ridx];
+                int is_sel = (ridx == f->selected);
+                if (is_sel) ab_append(ab, "\x1b[7m", 4);
+
+                /* ▶ / spaces (2 visual cols). */
+                if (is_sel) ab_append(ab, "▶ ", 4);   /* 3-byte UTF-8 + space */
+                else        ab_append(ab, "  ", 2);
+                avail -= 2;
+
+                /* Split path into dir prefix + filename. */
+                const char *slash = strrchr(m->path, '/');
+                int   dir_len  = slash ? (int)(slash - m->path + 1) : 0;
+                const char *fname = m->path + dir_len;
+                int   fname_len   = (int)strlen(fname);
+
+                /* Dir prefix — dim. */
+                if (dir_len > 0 && avail > 0) {
+                    int dl = dir_len < avail ? dir_len : avail;
+                    ab_append(ab, is_sel ? "\x1b[2;7m" : "\x1b[2m",
+                              is_sel ? 6 : 4);
+                    ab_append(ab, m->path, dl);
+                    avail -= dl;
+                    if (is_sel) ab_append(ab, "\x1b[7m",  4);
+                    else        ab_append(ab, "\x1b[m",   3);
+                }
+
+                /* Filename — char by char, highlight matched positions. */
+                int prev_hi = 0;
+                for (int i = 0; i < fname_len && avail > 0; i++, avail--) {
+                    int abs_pos = dir_len + i;
+                    int is_match = 0;
+                    for (int j = 0; j < m->match_count; j++)
+                        if (m->match_pos[j] == abs_pos) { is_match = 1; break; }
+                    if (is_match != prev_hi) {
+                        if (is_sel)
+                            ab_append(ab, is_match ? "\x1b[1;33;7m" : "\x1b[7m",
+                                      is_match ? 9 : 4);
+                        else
+                            ab_append(ab, is_match ? "\x1b[1;33m" : "\x1b[m",
+                                      is_match ? 7 : 3);
+                        prev_hi = is_match;
+                    }
+                    ab_append(ab, &fname[i], 1);
+                }
+                ab_append(ab, "\x1b[m", 3);
+                while (avail-- > 0) ab_append(ab, " ", 1);
+            } else {
+                for (int x = 0; x < avail; x++) ab_append(ab, " ", 1);
+            }
+
+            ab_append(ab, " \x1b[m│", 7);
+        }
+    }
+}
+
 static void draw_global_command_bar(AppendBuf *ab) {
     char mv[24];
     int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;1H", E.term_rows);
@@ -554,6 +741,7 @@ static void draw_global_command_bar(AppendBuf *ab) {
         }
 
         case MODE_NORMAL:
+        case MODE_FUZZY:
             if (E.statusmsg[0]) {
                 int len = (int)strlen(E.statusmsg);
                 if (len > E.term_cols) len = E.term_cols;
@@ -636,6 +824,9 @@ void editor_refresh_screen(void) {
     draw_dividers(&ab);
     draw_global_command_bar(&ab);
 
+    /* Fuzzy overlay drawn on top of everything else. */
+    if (E.mode == MODE_FUZZY) fuzzy_draw(&ab);
+
     /* Cursor shape. */
     ab_append(&ab, (E.mode == MODE_NORMAL) ? "\x1b[1 q" : "\x1b[6 q", 5);
 
@@ -643,7 +834,21 @@ void editor_refresh_screen(void) {
     char buf[32];
     int  len;
     Pane *ap = &E.panes[E.cur_pane];
-    if (E.mode == MODE_COMMAND) {
+    if (E.mode == MODE_FUZZY) {
+        /* Cursor sits in the search input row, right after the query text. */
+        int width = E.term_cols * E.opts.fuzzy_width_pct / 100;
+        if (width < 40)              width = 40;
+        if (width > E.term_cols - 2) width = E.term_cols - 2;
+        int height = FUZZY_MAX_VIS + 6;
+        if (height > E.term_rows - 2) height = E.term_rows - 2;
+        int top  = (E.term_rows - height) / 2 + 1;
+        int left = (E.term_cols - width)  / 2 + 1;
+        /* col: │(1) + space(1) + "search:"(7) + " > "(3) + query + 1 */
+        int avail = width - 2 - 1 - 7 - 3;
+        int qshow = (E.fuzzy.query_len > avail) ? avail : E.fuzzy.query_len;
+        len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
+                       top + 1, left + 1 + 7 + 3 + qshow + 1);
+    } else if (E.mode == MODE_COMMAND) {
         len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
                        E.term_rows, E.cmdlen + 2);
     } else if (E.mode == MODE_SEARCH) {

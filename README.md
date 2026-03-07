@@ -299,6 +299,46 @@ Press `Tab` after `:e` (or `:e <prefix>`) to complete filenames from the current
 
 ---
 
+## Fuzzy File Finder
+
+Open the fuzzy finder with `<leader>t` (default leader = `Space`) or `:Fuzzy`. It scans all files in the current working directory and subdirectories and lets you filter them by typing.
+
+```
+┌──────────────────────────────────────────────┐
+│ search: > ren                                │
+├──────────────────────────────────────────────┤
+│▶ src/ render.c                               │
+│  src/ render.h                               │
+│  tests/ test_search.c                        │
+├──────────────────────────────────────────────┤
+│ 3 / 127    <Enter> open  <C-x> sp  <C-v> vsp │
+└──────────────────────────────────────────────┘
+```
+
+- The **directory prefix** is shown dim; matched characters are **bold yellow**.
+- The selected result is highlighted with a `▶` marker.
+
+| Key        | Action                                      |
+|------------|---------------------------------------------|
+| Type       | Filter results (subsequence, case-insensitive) |
+| `↑` / `Ctrl-K` | Move selection up                       |
+| `↓` / `Ctrl-J` | Move selection down                     |
+| `Enter`    | Open selected file in current pane          |
+| `Ctrl-X`   | Open in a new horizontal split              |
+| `Ctrl-V`   | Open in a new vertical split                |
+| `Backspace`| Delete last query character                 |
+| `Esc`      | Close the finder                            |
+
+Hidden directories (`.git`, `node_modules`, `build`, `target`, etc.) are excluded automatically.
+
+The panel width is configurable in Lua:
+
+```lua
+qe.set_option("fuzzy_width_pct", 60)   -- default 40
+```
+
+---
+
 ## Search (`/`)
 
 Type `/` in Normal mode, then enter a pattern and press `Enter`. The cursor jumps to the first match and all occurrences are highlighted.
@@ -332,11 +372,12 @@ Quick Ed is configured with Lua. The configuration file is loaded at startup fro
 
 Set editor options.
 
-| Option          | Type    | Default | Description                         |
-|-----------------|---------|---------|-------------------------------------|
-| `line_numbers`  | boolean | `true`  | Show line numbers in the gutter     |
-| `autoindent`    | boolean | `true`  | Copy indentation on new lines       |
-| `tabwidth`      | integer | `4`     | Number of spaces inserted by Tab    |
+| Option            | Type    | Default | Description                                   |
+|-------------------|---------|---------|-----------------------------------------------|
+| `line_numbers`    | boolean | `true`  | Show line numbers in the gutter               |
+| `autoindent`      | boolean | `true`  | Copy indentation on new lines                 |
+| `tabwidth`        | integer | `4`     | Number of spaces inserted by Tab              |
+| `fuzzy_width_pct` | integer | `40`    | Fuzzy finder panel width as % of terminal     |
 
 ```lua
 qe.set_option("tabwidth", 2)

@@ -3,6 +3,7 @@
 #define EDITOR_H
 
 #include "buf.h"
+#include "fuzzy.h"
 #include "undo.h"
 #include "search.h"
 #include "syntax.h"
@@ -11,8 +12,10 @@
 #define MAX_BUFS  32
 #define MAX_PANES  8
 #define JUMP_MAX  100
+#define MARK_MAX  26
 
 typedef struct { int buf_idx, row, col; } JumpEntry;
+typedef struct { int valid, buf_idx, row, col; } Mark;
 
 typedef struct {
     int top, left;      /* 1-based terminal row/col of first content row/col */
@@ -43,6 +46,7 @@ typedef enum {
     MODE_SEARCH,
     MODE_VISUAL,       /* characterwise visual selection */
     MODE_VISUAL_LINE,  /* linewise visual selection      */
+    MODE_FUZZY,        /* fuzzy file finder overlay      */
 } EditorMode;
 
 /* All user-configurable settings live here so they can later be
@@ -51,6 +55,7 @@ typedef struct {
     int line_numbers;   /* 1 = show, 0 = hide */
     int autoindent;     /* 1 = copy indentation on Enter/o/O */
     int tabwidth;       /* spaces inserted by Tab key (default 4) */
+    int fuzzy_width_pct; /* fuzzy panel width as % of terminal (default 40) */
 } EditorOptions;
 
 typedef struct {
@@ -160,6 +165,13 @@ typedef struct {
     JumpEntry jump_list[JUMP_MAX];
     int       jump_count;     /* number of stored entries           */
     int       jump_cur;       /* navigating index; == jump_count when live */
+
+    /* Marks (ma = set, `a = jump exact, 'a = jump line) */
+    Mark      marks[MARK_MAX];
+    int       pending_mark;   /* 0=none; 'm'=set, '`'=jump-exact, '\''=jump-line */
+
+    /* Fuzzy finder overlay */
+    FuzzyState fuzzy;
 } EditorConfig;
 
 extern EditorConfig E;

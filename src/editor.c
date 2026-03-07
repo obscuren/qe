@@ -19,9 +19,10 @@ void editor_init(void) {
     E.cmdlen       = 0;
     E.statusmsg[0] = '\0';
     E.statusmsg_is_error = 0;
-    E.opts.line_numbers = 1;
-    E.opts.autoindent   = 1;
-    E.opts.tabwidth     = 4;
+    E.opts.line_numbers   = 1;
+    E.opts.autoindent     = 1;
+    E.opts.tabwidth       = 4;
+    E.opts.fuzzy_width_pct = 40;
 
     buf_init(&E.buf);
 
@@ -83,6 +84,9 @@ void editor_init(void) {
 
     E.jump_count = 0;
     E.jump_cur   = 0;
+
+    for (int i = 0; i < MARK_MAX; i++) E.marks[i].valid = 0;
+    E.pending_mark = 0;
 
     E.num_buftabs = 1;
     E.cur_buftab  = 0;

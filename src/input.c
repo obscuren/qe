@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "input.h"
 #include "editor.h"
+#include "fuzzy.h"
 #include "lua_bridge.h"
 #include "search.h"
 #include "tree.h"
@@ -1627,6 +1628,10 @@ void editor_open_tree(void) {
     editor_open_tree_pane();
 }
 
+void editor_open_fuzzy(void) {
+    fuzzy_open();
+}
+
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
@@ -2151,6 +2156,11 @@ void editor_execute_command(void) {
         editor_open_tree_pane();
         goto done;
 
+    /* ── :Fuzzy ─────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "Fuzzy") == 0 || strcmp(cmd, "fuzzy") == 0) {
+        fuzzy_open();
+        goto done;
+
     /* ── :close ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "close") == 0) {
         pane_close(E.cur_pane);
@@ -2353,7 +2363,8 @@ void editor_execute_command(void) {
     }
 
 done:
-    E.mode      = MODE_NORMAL;
+    if (E.mode != MODE_FUZZY)  /* fuzzy_open() sets MODE_FUZZY — don't clobber */
+        E.mode = MODE_NORMAL;
     E.cmdbuf[0] = '\0';
     E.cmdlen    = 0;
 }
@@ -2440,6 +2451,51 @@ static void editor_process_normal(int c) {
         E.pending_leader = 0;
         if (!lua_bridge_call_key(MODE_NORMAL, LEADER_BASE + c))
             status_err("No mapping for <leader>%c", (char)c);
+        return;
+    }
+
+    /* Pending mark operation: next key is the mark letter. */
+    if (E.pending_mark) {
+        int pm = E.pending_mark;
+        E.pending_mark = 0;
+        if (c >= 'a' && c <= 'z') {
+            int idx = c - 'a';
+            if (pm == 'm') {
+                E.marks[idx].valid   = 1;
+                E.marks[idx].buf_idx = E.cur_buftab;
+                E.marks[idx].row     = E.cy;
+                E.marks[idx].col     = E.cx;
+            } else {
+                if (!E.marks[idx].valid) {
+                    status_err("Mark not set");
+                } else {
+                    if (E.marks[idx].buf_idx != E.cur_buftab)
+                        switch_to_buf(E.marks[idx].buf_idx);
+                    else
+                        jump_push();
+                    int r = E.marks[idx].row;
+                    if (r >= E.buf.numrows) r = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+                    E.cy = r;
+                    if (pm == '`') {
+                        int mc = E.marks[idx].col;
+                        if (E.buf.numrows > 0 && E.cy < E.buf.numrows) {
+                            if (mc >= E.buf.rows[E.cy].len)
+                                mc = E.buf.rows[E.cy].len > 0 ? E.buf.rows[E.cy].len - 1 : 0;
+                        }
+                        E.cx = mc;
+                    } else { /* '\'' — first non-blank of line */
+                        E.cx = 0;
+                        if (E.buf.numrows > 0 && E.cy < E.buf.numrows) {
+                            Row *row = &E.buf.rows[E.cy];
+                            while (E.cx < row->len &&
+                                   (row->chars[E.cx] == ' ' || row->chars[E.cx] == '\t'))
+                                E.cx++;
+                            if (E.cx >= row->len && row->len > 0) E.cx = row->len - 1;
+                        }
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -2882,6 +2938,17 @@ static void editor_process_normal(int c) {
             E.pending_g = 1;
             break;
 
+        /* --- marks --- */
+        case 'm':
+            E.pending_mark = 'm';
+            break;
+        case '`':
+            E.pending_mark = '`';
+            break;
+        case '\'':
+            E.pending_mark = '\'';
+            break;
+
         /* --- % : jump to matching bracket --- */
         case '%':
             if (E.match_bracket_valid) {
@@ -3186,11 +3253,14 @@ static void editor_process_search(int c) {
 /* ── Dispatch ────────────────────────────────────────────────────────── */
 
 /* Compute gutter width for a buffer (mirrors render.c logic). */
-static int gutter_width_for_buf(const Buffer *buf) {
+static int gutter_width_for_buf(const Buffer *buf, int buf_idx) {
     if (!E.opts.line_numbers || buf->numrows == 0) return 0;
     int n = buf->numrows, w = 0;
     while (n > 0) { w++; n /= 10; }
-    return w + 1;
+    w++;
+    for (int i = 0; i < MARK_MAX; i++)
+        if (E.marks[i].valid && E.marks[i].buf_idx == buf_idx) { w += 2; break; }
+    return w;
 }
 
 /* Handle a mouse click: focus the pane and position the cursor. */
@@ -3243,7 +3313,7 @@ static void handle_mouse_press(void) {
     }
 
     /* Convert terminal coords to file coords. */
-    int gw      = gutter_width_for_buf(&E.buf);
+    int gw      = gutter_width_for_buf(&E.buf, E.cur_buftab);
     int filerow = (my - p->top) + E.rowoff;
     int click_vcol = (mx - p->left - gw) + E.coloff;  /* visual column */
     if (click_vcol < 0) click_vcol = 0;
@@ -3276,6 +3346,96 @@ static void handle_mouse_scroll(int dir) {
     }
 }
 
+/* ── Fuzzy finder key handler ────────────────────────────────────────── */
+
+static void editor_process_fuzzy(int c) {
+    FuzzyState *f = &E.fuzzy;
+
+    if (c == '\x1b') { fuzzy_close(); return; }
+
+    if (c == '\r') {   /* Enter: open in current pane */
+        if (f->match_count > 0) {
+            char path[512];
+            strncpy(path, f->matches[f->selected].path, sizeof(path) - 1);
+            path[sizeof(path)-1] = '\0';
+            fuzzy_close();
+            open_new_buf(path);
+        } else {
+            fuzzy_close();
+        }
+        return;
+    }
+
+    if (c == 0x18) {   /* Ctrl-X: open in horizontal split */
+        if (f->match_count > 0) {
+            char path[512];
+            strncpy(path, f->matches[f->selected].path, sizeof(path) - 1);
+            path[sizeof(path)-1] = '\0';
+            fuzzy_close();
+            pane_save_cursor();
+            if (pane_split_h(E.cur_pane)) {
+                pane_activate(E.cur_pane + 1);
+                open_new_buf(path);
+                E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+            }
+        } else {
+            fuzzy_close();
+        }
+        return;
+    }
+
+    if (c == 0x16) {   /* Ctrl-V: open in vertical split */
+        if (f->match_count > 0) {
+            char path[512];
+            strncpy(path, f->matches[f->selected].path, sizeof(path) - 1);
+            path[sizeof(path)-1] = '\0';
+            fuzzy_close();
+            pane_save_cursor();
+            if (pane_split_v(E.cur_pane)) {
+                pane_activate(E.cur_pane + 1);
+                open_new_buf(path);
+                E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+            }
+        } else {
+            fuzzy_close();
+        }
+        return;
+    }
+
+    /* Navigation. */
+    if (c == ARROW_UP || c == 0x0b) {   /* ↑ or Ctrl-K */
+        if (f->selected > 0) {
+            f->selected--;
+            if (f->selected < f->scroll) f->scroll = f->selected;
+        }
+        return;
+    }
+    if (c == ARROW_DOWN || c == 0x0a) { /* ↓ or Ctrl-J */
+        if (f->selected < f->match_count - 1) {
+            f->selected++;
+            if (f->selected >= f->scroll + FUZZY_MAX_VIS)
+                f->scroll = f->selected - FUZZY_MAX_VIS + 1;
+        }
+        return;
+    }
+
+    /* Query editing. */
+    if (c == 127 || c == 8) {           /* Backspace */
+        if (f->query_len > 0) {
+            f->query[--f->query_len] = '\0';
+            f->selected = 0; f->scroll = 0;
+            fuzzy_filter();
+        }
+        return;
+    }
+    if (c >= 32 && c < 127 && f->query_len < 255) {
+        f->query[f->query_len++] = (char)c;
+        f->query[f->query_len]   = '\0';
+        f->selected = 0; f->scroll = 0;
+        fuzzy_filter();
+    }
+}
+
 void editor_process_keypress(void) {
     int c = editor_read_key();
 
@@ -3299,6 +3459,7 @@ void editor_process_keypress(void) {
         case MODE_SEARCH:      editor_process_search(c);  break;
         case MODE_VISUAL:
         case MODE_VISUAL_LINE: editor_process_visual(c);  break;
+        case MODE_FUZZY:       editor_process_fuzzy(c);   break;
     }
 
     /* After any non-vertical-move action, record the current column as the
