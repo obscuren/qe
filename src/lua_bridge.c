@@ -64,6 +64,10 @@ static int l_set_option(lua_State *LS) {
         int p = (int)luaL_checkinteger(LS, 2);
         if (p >= 10 && p <= 100) E.opts.fuzzy_width_pct = p;
         else luaL_error(LS, "fuzzy_width_pct must be 10-100");
+    } else if (strcmp(name, "qf_height") == 0) {
+        int h = (int)luaL_checkinteger(LS, 2);
+        if (h >= 3 && h <= 20) E.opts.qf_height_rows = h;
+        else luaL_error(LS, "qf_height must be 3-20");
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }

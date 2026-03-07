@@ -4,6 +4,7 @@
 
 #include "buf.h"
 #include "fuzzy.h"
+#include "qf.h"
 #include "undo.h"
 #include "search.h"
 #include "syntax.h"
@@ -37,6 +38,8 @@ typedef struct {
     const SyntaxDef *syntax;
     int        is_tree;   /* 1 = this slot holds the file-tree buffer */
     TreeState *tree;      /* non-NULL when is_tree == 1               */
+    int        is_qf;     /* 1 = this slot holds the quickfix buffer  */
+    QfList    *qf;        /* non-NULL when is_qf == 1                 */
 } BufTab;
 
 typedef enum {
@@ -55,7 +58,8 @@ typedef struct {
     int line_numbers;   /* 1 = show, 0 = hide */
     int autoindent;     /* 1 = copy indentation on Enter/o/O */
     int tabwidth;       /* spaces inserted by Tab key (default 4) */
-    int fuzzy_width_pct; /* fuzzy panel width as % of terminal (default 40) */
+    int fuzzy_width_pct;  /* fuzzy panel width as % of terminal (default 40) */
+    int qf_height_rows;   /* quickfix pane height in rows (default 8)        */
 } EditorOptions;
 
 typedef struct {

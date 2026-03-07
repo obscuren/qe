@@ -2,6 +2,7 @@
 #include "render.h"
 #include "editor.h"
 #include "fuzzy.h"
+#include "qf.h"
 #include "search.h"
 #include "syntax.h"
 
@@ -310,8 +311,9 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                            int vis_ar, int vis_ac,
                            int bm_valid, int bm_row, int bm_col) {
     int is_tree      = E.buftabs[p->buf_idx].is_tree;
-    int gw           = is_tree ? 0 : gutter_width_for(buf, p->buf_idx);
-    int has_marks    = is_tree ? 0 : buf_has_marks(p->buf_idx);
+    int is_qf        = E.buftabs[p->buf_idx].is_qf;
+    int gw           = (is_tree || is_qf) ? 0 : gutter_width_for(buf, p->buf_idx);
+    int has_marks    = (is_tree || is_qf) ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
 
     /* Cascade hl_open_comment for dirty rows. */
@@ -332,6 +334,67 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
         ab_append(ab, erase, elen);
+
+        /* Quickfix pane: custom colour rendering per entry. */
+        if (is_qf) {
+            QfList *ql = E.buftabs[p->buf_idx].qf;
+            if (!ql || filerow >= ql->count) {
+                ab_append(ab, "~", 1);
+            } else {
+                QfEntry *e  = &ql->entries[filerow];
+                int is_sel  = (filerow == pcy);
+                int avail   = p->width;
+
+                if (is_sel) ab_append(ab, "\x1b[7m", 4);
+
+                /* ▶ / spaces */
+                if (is_sel) ab_append(ab, "▶ ", 4);
+                else        ab_append(ab, "  ", 2);
+                avail -= 2;
+
+                /* Dir prefix (dim) + filename (normal). */
+                const char *slash  = strrchr(e->path, '/');
+                int   dir_len  = slash ? (int)(slash - e->path + 1) : 0;
+                const char *fname  = e->path + dir_len;
+                int   fname_len = (int)strlen(fname);
+
+                if (dir_len > 0 && avail > 0) {
+                    int dl = dir_len < avail ? dir_len : avail;
+                    ab_append(ab, is_sel ? "\x1b[2;7m" : "\x1b[2m", is_sel ? 6 : 4);
+                    ab_append(ab, e->path, dl);
+                    avail -= dl;
+                    ab_append(ab, is_sel ? "\x1b[7m" : "\x1b[m", is_sel ? 4 : 3);
+                }
+                if (fname_len > 0 && avail > 0) {
+                    int fl = fname_len < avail ? fname_len : avail;
+                    ab_append(ab, fname, fl);
+                    avail -= fl;
+                }
+
+                /* Line number (yellow). */
+                if (avail > 0) {
+                    char lnum[16];
+                    int  llen = snprintf(lnum, sizeof(lnum), ":%d:", e->line);
+                    if (llen > avail) llen = avail;
+                    ab_append(ab, is_sel ? "\x1b[33;7m" : "\x1b[33m", is_sel ? 8 : 5);
+                    ab_append(ab, lnum, llen);
+                    avail -= llen;
+                    ab_append(ab, is_sel ? "\x1b[7m" : "\x1b[m", is_sel ? 4 : 3);
+                }
+
+                /* Match text. */
+                if (avail > 1) {
+                    ab_append(ab, " ", 1);
+                    avail--;
+                    int tlen = (int)strlen(e->text);
+                    if (tlen > avail) tlen = avail;
+                    ab_append(ab, e->text, tlen);
+                }
+
+                ab_append(ab, "\x1b[m", 3);
+            }
+            continue;
+        }
 
         if (buf->numrows == 0) {
             /* Empty buffer: splash only for single-pane active. */
@@ -435,6 +498,28 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
             ab_append(ab, " ", 1);
             col += len + 1;
         }
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Quickfix pane: compact status. */
+    if (E.buftabs[p->buf_idx].is_qf) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        QfList *ql = E.buftabs[p->buf_idx].qf;
+        char left[128], right[16];
+        int llen = ql
+            ? snprintf(left,  sizeof(left),  " [Quickfix] %d results: \"%s\"",
+                       ql->count, ql->pattern)
+            : snprintf(left,  sizeof(left),  " [Quickfix]");
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
         ab_append(ab, "\x1b[m", 3);
         return;
     }

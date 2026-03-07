@@ -2,6 +2,7 @@
 #include "input.h"
 #include "editor.h"
 #include "fuzzy.h"
+#include "qf.h"
 #include "lua_bridge.h"
 #include "search.h"
 #include "tree.h"
@@ -1632,6 +1633,226 @@ void editor_open_fuzzy(void) {
     fuzzy_open();
 }
 
+/* ── Quickfix pane ───────────────────────────────────────────────────── */
+
+static int qf_pane_idx(void) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].is_qf) return i;
+    return -1;
+}
+
+/* Jump to the selected quickfix entry in the last content pane. */
+static void qf_jump(int idx) {
+    int qpi = qf_pane_idx();
+    if (qpi < 0) return;
+    QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
+    if (!ql || idx < 0 || idx >= ql->count) return;
+
+    ql->selected = idx;
+
+    /* Also update cy in the qf pane's buffer / pane slot. */
+    if (qpi == E.cur_pane) {
+        E.cy = idx;
+        if (E.cy < E.rowoff) E.rowoff = E.cy;
+        if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    } else {
+        E.panes[qpi].cy = idx;
+    }
+
+    QfEntry *e = &ql->entries[idx];
+
+    /* Find a content pane to display in. */
+    int cpane = E.last_content_pane;
+    if (cpane < 0 || cpane >= E.num_panes ||
+        E.buftabs[E.panes[cpane].buf_idx].is_qf ||
+        E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+        cpane = -1;
+        for (int i = 0; i < E.num_panes; i++) {
+            if (!E.buftabs[E.panes[i].buf_idx].is_qf &&
+                !E.buftabs[E.panes[i].buf_idx].is_tree)
+                { cpane = i; break; }
+        }
+    }
+    if (cpane < 0) return;
+
+    /* Activate content pane, open file. */
+    pane_activate(cpane);
+    open_new_buf(e->path);
+    E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+
+    /* Jump to line (cy/rowoff saved into content pane slot by pane_activate below). */
+    int row = e->line - 1;
+    if (row < 0) row = 0;
+    if (row >= E.buf.numrows) row = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+    E.cy = row;
+    E.cx = (e->col > 1) ? e->col - 1 : 0;
+    if (E.cx >= E.buf.rows[E.cy].len) E.cx = 0;
+    /* Adjust rowoff so the target line is visible in the inactive pane rendering.
+       Inactive panes use p->rowoff directly — editor_scroll() only runs for the
+       active pane, so we must set rowoff correctly before saving via pane_activate. */
+    if (E.cy < E.rowoff)
+        E.rowoff = E.cy;
+    else if (E.cy >= E.rowoff + E.screenrows)
+        E.rowoff = E.cy - E.screenrows / 2;
+
+    /* Return focus to qf pane; pane_activate saves the content cursor first. */
+    pane_activate(qpi);
+}
+
+static void qf_close_pane(void) {
+    int qpi = qf_pane_idx();
+    if (qpi < 0) return;
+
+    int qf_top    = E.panes[qpi].top;
+    int qf_h      = E.panes[qpi].height;
+    int buf_idx   = E.panes[qpi].buf_idx;
+    int qf_active = (E.cur_pane == qpi);
+
+    /* Find the content pane to switch to after removal. */
+    int cpane = E.last_content_pane;
+    if (cpane < 0 || cpane >= E.num_panes || cpane == qpi ||
+        E.buftabs[E.panes[cpane].buf_idx].is_qf ||
+        E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+        cpane = -1;
+        for (int i = 0; i < E.num_panes; i++) {
+            if (i != qpi && !E.buftabs[E.panes[i].buf_idx].is_qf &&
+                !E.buftabs[E.panes[i].buf_idx].is_tree) {
+                cpane = i; break;
+            }
+        }
+    }
+
+    /* Expand panes whose status bar row is directly above the qf pane. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i == qpi) continue;
+        Pane *p = &E.panes[i];
+        if (p->top + p->height + 1 == qf_top)
+            p->height += qf_h + 1;
+    }
+
+    /* Free the qf buffer.
+       When the qf pane is active, the buffer lives in E.buf — free it directly
+       without saving, so the qf content is never written over any content buftab.
+       When inactive, it is parked in the buftab. */
+    if (qf_active) {
+        for (int i = 0; i < E.buf.numrows; i++) {
+            free(E.buf.rows[i].chars);
+            free(E.buf.rows[i].hl);
+        }
+        free(E.buf.rows);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+    } else {
+        pane_save_cursor();   /* preserve live content cursor in its pane slot */
+        buf_free(&E.buftabs[buf_idx].buf);
+    }
+
+    QfList *ql = E.buftabs[buf_idx].qf;
+    if (ql) { qf_free(ql); free(ql); }
+    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+    /* No buftab compaction — all other pane buf_idx values remain valid. */
+
+    /* Remove the qf pane from the array. */
+    for (int i = qpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
+    E.num_panes--;
+    if (cpane > qpi) cpane--;
+
+    /* Manually activate the content pane (avoids pane_activate's stale-index
+       pane_save_cursor + buffer save that would clobber the content buffer). */
+    if (cpane >= 0) {
+        int donor_buf = E.panes[cpane].buf_idx;
+        if (E.cur_buftab != donor_buf) {
+            editor_buf_restore(donor_buf);
+            E.cur_buftab = donor_buf;
+        }
+        E.cur_pane   = cpane;
+        E.screenrows = E.panes[cpane].height;
+        E.screencols = E.panes[cpane].width;
+        E.cx     = E.panes[cpane].cx;
+        E.cy     = E.panes[cpane].cy;
+        E.rowoff = E.panes[cpane].rowoff;
+        E.coloff = E.panes[cpane].coloff;
+    }
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+}
+
+static void qf_open_pane(QfList *ql) {
+    /* Close existing qf pane first (replace with new results). */
+    if (qf_pane_idx() >= 0) qf_close_pane();
+
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
+
+    int qh  = E.opts.qf_height_rows;
+    /* qf content top: leaves room for qf status bar + command bar at bottom */
+    int qf_top = E.term_rows - 1 - qh;   /* status bar at term_rows-1 */
+
+    /* Ensure content panes don't overlap the qf zone. */
+    for (int i = 0; i < E.num_panes; i++) {
+        Pane *p = &E.panes[i];
+        if (p->top + p->height >= qf_top) {
+            int new_h = qf_top - 1 - p->top;
+            if (new_h < 2) { status_err("Not enough space for quickfix"); return; }
+            p->height = new_h;
+        }
+    }
+
+    /* Remember which pane is the current content pane. */
+    if (!E.buftabs[E.panes[E.cur_pane].buf_idx].is_qf &&
+        !E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree)
+        E.last_content_pane = E.cur_pane;
+
+    /* Allocate buftab for qf buffer. */
+    int qidx = E.num_buftabs++;
+    memset(&E.buftabs[qidx], 0, sizeof(BufTab));
+    E.buftabs[qidx].is_qf = 1;
+    E.buftabs[qidx].qf    = ql;
+
+    buf_init(&E.buftabs[qidx].buf);
+    qf_render_to_buf(ql, &E.buftabs[qidx].buf);
+
+    /* Append qf pane at the bottom. */
+    int qpi = E.num_panes++;
+    E.panes[qpi].top    = qf_top;
+    E.panes[qpi].left   = 1;
+    E.panes[qpi].height = qh;
+    E.panes[qpi].width  = E.term_cols;
+    E.panes[qpi].buf_idx = qidx;
+    E.panes[qpi].cx = E.panes[qpi].cy = 0;
+    E.panes[qpi].rowoff = E.panes[qpi].coloff = 0;
+
+    /* Activate the qf pane. */
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+    E.cur_pane   = qpi;
+    E.cur_buftab = qidx;
+    E.cx = E.cy = E.rowoff = E.coloff = 0;
+    E.screenrows = qh;
+    E.screencols = E.term_cols;
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+    editor_buf_restore(qidx);
+}
+
+static void qf_handle_key(int c) {
+    int qpi = qf_pane_idx();
+    if (qpi < 0) return;
+    QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
+
+    if (c == 'q' || c == '\x1b') { qf_close_pane(); return; }
+
+    if ((c == ARROW_DOWN || c == 'j') && ql && E.cy < ql->count - 1) {
+        E.cy++;
+        if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    } else if ((c == ARROW_UP || c == 'k') && E.cy > 0) {
+        E.cy--;
+        if (E.cy < E.rowoff) E.rowoff = E.cy;
+    } else if (c == '\r' && ql && ql->count > 0) {
+        qf_jump(E.cy);
+    }
+}
+
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
@@ -2187,6 +2408,67 @@ void editor_execute_command(void) {
         fuzzy_open();
         goto done;
 
+    /* ── :grep [pattern [path]] ─────────────────────────────────────── */
+    } else if (strncmp(cmd, "grep ", 5) == 0 || strcmp(cmd, "grep") == 0) {
+        const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
+        if (!arg || !*arg) { status_err("Usage: :grep pattern [path]"); goto done; }
+        /* Split pattern and optional path. */
+        char pat[256] = {0}, path[512] = {0};
+        const char *sp = strchr(arg, ' ');
+        if (sp) {
+            int plen = (int)(sp - arg);
+            if (plen >= (int)sizeof(pat)) plen = (int)sizeof(pat) - 1;
+            strncpy(pat, arg, plen);
+            strncpy(path, sp + 1, sizeof(path) - 1);
+        } else {
+            strncpy(pat, arg, sizeof(pat) - 1);
+        }
+        QfList *ql = malloc(sizeof(QfList));
+        if (!ql) { status_err("Out of memory"); goto done; }
+        memset(ql, 0, sizeof(QfList));
+        qf_run(ql, pat, path[0] ? path : NULL);
+        if (ql->count == 0) {
+            qf_free(ql); free(ql);
+            status_err("No results for \"%s\"", pat);
+            goto done;
+        }
+        qf_open_pane(ql);
+        goto done;
+
+    /* ── :copen ─────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "copen") == 0) {
+        if (qf_pane_idx() >= 0) { status_err("Quickfix already open"); goto done; }
+        /* Find existing qf buftab to reopen. */
+        int qi = -1;
+        for (int i = 0; i < E.num_buftabs; i++)
+            if (E.buftabs[i].is_qf) { qi = i; break; }
+        if (qi < 0) { status_err("No quickfix results"); goto done; }
+        qf_open_pane(E.buftabs[qi].qf);
+        goto done;
+
+    /* ── :cclose ────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "cclose") == 0 || strcmp(cmd, "ccl") == 0) {
+        if (qf_pane_idx() < 0) { status_err("No quickfix pane"); goto done; }
+        qf_close_pane();
+        goto done;
+
+    /* ── :cn / :cp ──────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "cn") == 0 || strcmp(cmd, "cnext") == 0) {
+        int qpi = qf_pane_idx();
+        if (qpi < 0) { status_err("No quickfix list"); goto done; }
+        QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
+        if (ql && ql->selected < ql->count - 1) qf_jump(ql->selected + 1);
+        else status_err("Already at last quickfix entry");
+        goto done;
+
+    } else if (strcmp(cmd, "cp") == 0 || strcmp(cmd, "cprev") == 0) {
+        int qpi = qf_pane_idx();
+        if (qpi < 0) { status_err("No quickfix list"); goto done; }
+        QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
+        if (ql && ql->selected > 0) qf_jump(ql->selected - 1);
+        else status_err("Already at first quickfix entry");
+        goto done;
+
     /* ── :close ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "close") == 0) {
         pane_close(E.cur_pane);
@@ -2528,6 +2810,12 @@ static void editor_process_normal(int c) {
     /* Tree pane: route all keys to tree handler. */
     if (E.buftabs[E.cur_buftab].is_tree) {
         tree_handle_key(c);
+        return;
+    }
+
+    /* Quickfix pane: route all keys to qf handler. */
+    if (E.buftabs[E.cur_buftab].is_qf) {
+        qf_handle_key(c);
         return;
     }
 
