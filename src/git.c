@@ -263,6 +263,69 @@ void git_diff_signs_both(const char *filename,
     *out_old_signs = os;
 }
 
+/* ── Commit ──────────────────────────────────────────────────────────── */
+
+int git_commit(const char *message, char *output, int outlen) {
+    if (!message || !*message) return 0;
+
+    /* Write message to temp file to avoid shell quoting issues. */
+    char msgpath[] = "/tmp/qe_cmsg_XXXXXX";
+    int fd = mkstemp(msgpath);
+    if (fd < 0) return 0;
+    write(fd, message, strlen(message));
+    close(fd);
+
+    char qmsg[256];
+    shell_quote(msgpath, qmsg, sizeof(qmsg));
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "git commit -F %s 2>&1", qmsg);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { unlink(msgpath); return 0; }
+
+    /* Read first line of output. */
+    if (output && outlen > 0) {
+        output[0] = '\0';
+        if (fgets(output, outlen, fp)) {
+            int len = (int)strlen(output);
+            while (len > 0 && (output[len-1] == '\n' || output[len-1] == '\r'))
+                output[--len] = '\0';
+        }
+    }
+
+    int rc = pclose(fp);
+    unlink(msgpath);
+    return (rc == 0) ? 1 : 0;
+}
+
+char *git_staged_summary(void) {
+    FILE *fp = popen("git diff --cached --stat 2>/dev/null", "r");
+    if (!fp) return NULL;
+
+    size_t cap = 512, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) { pclose(fp); return NULL; }
+
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        size_t ll = strlen(line);
+        if (len + ll + 1 > cap) {
+            cap = (len + ll + 1) * 2;
+            char *tmp = realloc(buf, cap);
+            if (!tmp) break;
+            buf = tmp;
+        }
+        memcpy(buf + len, line, ll);
+        len += ll;
+    }
+    pclose(fp);
+
+    if (len == 0) { free(buf); return NULL; }
+    buf[len] = '\0';
+    return buf;
+}
+
 /* ── Hunk operations ─────────────────────────────────────────────────── */
 
 /* Helper: write buffer rows to a temp file, return fd (caller closes). */

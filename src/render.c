@@ -336,7 +336,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int is_qf        = E.buftabs[p->buf_idx].is_qf;
     int is_blame     = E.buftabs[p->buf_idx].is_blame;
     int is_diff      = E.buftabs[p->buf_idx].is_diff;
-    int no_gutter    = is_tree || is_qf || is_blame;
+    int is_commit    = E.buftabs[p->buf_idx].is_commit;
+    int no_gutter    = is_tree || is_qf || is_blame || is_commit;
     int gw           = no_gutter ? 0 : gutter_width_for(buf, p->buf_idx);
     int has_marks    = no_gutter ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
@@ -495,6 +496,19 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             }
 
             ab_append(ab, "\x1b[m", 3);
+            continue;
+        }
+
+        /* Commit buffer: dim comment lines starting with #. */
+        if (is_commit && filerow < buf->numrows) {
+            Row *row = &buf->rows[filerow];
+            int avail = p->width;
+            int rlen = row->len < avail ? row->len : avail;
+            if (rlen > 0 && row->chars[0] == '#')
+                ab_append(ab, "\x1b[2m", 4);  /* dim */
+            ab_append(ab, row->chars, rlen);
+            if (rlen > 0 && row->chars[0] == '#')
+                ab_append(ab, "\x1b[m", 3);
             continue;
         }
 
@@ -699,6 +713,25 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         const char *fname = buf->filename ? buf->filename : "[No Name]";
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left), " [HEAD] %.30s", fname);
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Commit buffer: status bar. */
+    if (E.buftabs[p->buf_idx].is_commit) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        char left[128], right[16];
+        int llen = snprintf(left, sizeof(left),
+                            " [Commit] :wq to commit, :q to abort");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
         if (llen > p->width) llen = p->width;
         ab_append(ab, left, llen);

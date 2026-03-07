@@ -44,6 +44,7 @@ typedef struct {
     int        blame_source_buf; /* buf_idx of the source file (scroll sync) */
     int        is_diff;   /* 1 = this slot holds a HEAD diff buffer   */
     int        diff_source_buf;  /* buf_idx of the working file (scroll sync) */
+    int        is_commit; /* 1 = this slot holds a git commit message buffer */
 } BufTab;
 
 typedef enum {

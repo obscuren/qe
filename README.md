@@ -339,6 +339,134 @@ qe.set_option("fuzzy_width_pct", 60)   -- default 40
 
 ---
 
+## File Tree Sidebar
+
+Open the file tree with `<leader>e` (default leader = `Space`) or `:Tree`. It displays the directory structure of the current working directory in a sidebar pane on the left.
+
+| Key        | Action                                      |
+|------------|---------------------------------------------|
+| `j` / `k`  | Move up / down                              |
+| `Enter`    | Open file / toggle directory                |
+| `I`        | Toggle hidden files                         |
+| `r`        | Refresh tree                                |
+| `q`        | Close tree                                  |
+
+Filenames are colored by git status: **green** for untracked/added, **yellow** for modified, **red** for deleted. Status propagates to parent directories.
+
+You can open a directory directly:
+
+```bash
+qe ~/projects/myapp    # opens file tree for that directory
+```
+
+---
+
+## Git Integration
+
+Quick Ed provides deep git integration when working inside a git repository.
+
+### Gutter signs
+
+The gutter column shows per-line diff status against HEAD:
+
+| Sign | Color  | Meaning          |
+|------|--------|------------------|
+| `+`  | Green  | Added line       |
+| `~`  | Yellow | Modified line    |
+| `-`  | Red    | Deleted line     |
+
+Signs update automatically after saving, undoing, or leaving insert mode.
+
+### Hunk navigation
+
+| Key    | Action                        |
+|--------|-------------------------------|
+| `]c`   | Jump to next changed hunk     |
+| `[c`   | Jump to previous changed hunk |
+
+### Hunk operations
+
+| Key            | Action                                      |
+|----------------|---------------------------------------------|
+| `<leader>hs`   | Stage the hunk under the cursor             |
+| `<leader>hr`   | Revert hunk to HEAD version (undoable)      |
+
+Also available as `:Gstage` and `:Grevert`.
+
+### Branch name
+
+The current git branch (or short SHA for detached HEAD) is shown in the status bar.
+
+### `:Gblame`
+
+Opens a scroll-synced blame pane to the left showing commit hash, author, and date for each line. Hash is shown in yellow, metadata in cyan. Press `q` to close.
+
+### `:Gdiff`
+
+Opens a side-by-side split: left pane shows the HEAD version (read-only), right pane shows the working copy. Both panes have syntax highlighting and line numbers.
+
+Changed lines are highlighted with background tinting:
+- **Green** background for added lines
+- **Yellow** background for modified lines
+- **Red** background for deleted lines
+
+Line numbers are tinted to match. Navigation with `j`/`k`/`g`/`G`, close with `q`.
+
+### `:Gcommit`
+
+Opens a commit message buffer for staged changes. The staged diff summary is shown as dimmed comment lines (prefixed with `#`). Write your message, then:
+
+| Command | Action                     |
+|---------|----------------------------|
+| `:wq`   | Commit with the message    |
+| `:q`    | Abort the commit           |
+
+---
+
+## Quickfix / Grep
+
+Search across files with `:grep`:
+
+```
+:grep pattern           search all files
+:grep pattern src/      search only in src/
+```
+
+Results open in a quickfix pane at the bottom. Navigate with `j`/`k`, press `Enter` to jump to the match. Press `q` to close the quickfix pane.
+
+---
+
+## Jump List
+
+| Key       | Action                    |
+|-----------|---------------------------|
+| `Ctrl-O`  | Jump to previous position |
+| `Ctrl-I`  | Jump to next position     |
+
+Jumps are recorded when navigating between files, searching, or using `G`/`gg`.
+
+---
+
+## Marks
+
+| Key       | Action                              |
+|-----------|-------------------------------------|
+| `m{a-z}`  | Set mark at current position        |
+| `` `{a-z} `` | Jump to exact mark position      |
+| `'{a-z}`  | Jump to mark line (first non-blank) |
+
+Marks persist across buffer switches. The mark letter is shown in the gutter (yellow).
+
+---
+
+## Mouse Support
+
+- **Click** in a pane to focus it and move the cursor
+- **Scroll wheel** scrolls the pane under the pointer
+- Click in the file tree to navigate entries
+
+---
+
 ## Search (`/`)
 
 Type `/` in Normal mode, then enter a pattern and press `Enter`. The cursor jumps to the first match and all occurrences are highlighted.

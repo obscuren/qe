@@ -40,6 +40,13 @@ char **git_show_head(const char *filename, int *out_count);
    Returns NULL on error.  Caller must free each string and the array. */
 char **git_blame(const char *filename, int *out_count);
 
+/* Run `git commit` with the given message.  Returns 1 on success.
+   output[] receives the first line of git's output (for status message). */
+int git_commit(const char *message, char *output, int outlen);
+
+/* Return a malloc'd string with `git diff --cached --stat` output, or NULL. */
+char *git_staged_summary(void);
+
 /* A single diff hunk (line ranges are 1-based). */
 typedef struct {
     int old_start, old_count;  /* range in old (HEAD) file */

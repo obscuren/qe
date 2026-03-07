@@ -1814,6 +1814,129 @@ static void blame_handle_key(int c) {
     }
 }
 
+/* ── Git commit buffer ───────────────────────────────────────────────── */
+
+static void commit_open(void) {
+    /* Check for staged changes. */
+    char *summary = git_staged_summary();
+    if (!summary) { status_err("Nothing staged to commit"); return; }
+
+    if (E.num_buftabs >= MAX_BUFS) { free(summary); status_err("Too many buffers"); return; }
+
+    /* Allocate commit buftab. */
+    int cidx = E.num_buftabs++;
+    memset(&E.buftabs[cidx], 0, sizeof(BufTab));
+    E.buftabs[cidx].is_commit = 1;
+    buf_init(&E.buftabs[cidx].buf);
+
+    /* Populate with template. */
+    Buffer *cb = &E.buftabs[cidx].buf;
+    buf_insert_row(cb, 0, "", 0);  /* blank line for message */
+    const char *sep = "# --- Staged changes ---";
+    buf_insert_row(cb, 1, sep, (int)strlen(sep));
+
+    /* Add staged diff as comment lines. */
+    int row = 2;
+    const char *p = summary;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        char line[512];
+        int llen = snprintf(line, sizeof(line), "# %.*s", len, p);
+        buf_insert_row(cb, row++, line, llen);
+        if (!nl) break;
+        p = nl + 1;
+    }
+    free(summary);
+    cb->dirty = 0;
+
+    /* Switch to commit buffer. */
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+    E.panes[E.cur_pane].buf_idx = cidx;
+    E.cur_buftab = cidx;
+    editor_buf_restore(cidx);
+    E.syntax = NULL;
+    E.mode = MODE_INSERT;  /* start in insert mode for convenience */
+    E.cy = 0; E.cx = 0;
+    E.rowoff = 0; E.coloff = 0;
+}
+
+/* Extract non-comment, non-empty lines from the commit buffer as the message. */
+static char *commit_extract_message(void) {
+    size_t cap = 256, len = 0;
+    char *msg = malloc(cap);
+    if (!msg) return NULL;
+
+    for (int i = 0; i < E.buf.numrows; i++) {
+        Row *r = &E.buf.rows[i];
+        if (r->len > 0 && r->chars[0] == '#') continue;  /* skip comments */
+        /* Include the line (even if blank, for paragraph separation). */
+        size_t need = len + r->len + 2;
+        if (need > cap) {
+            cap = need * 2;
+            char *tmp = realloc(msg, cap);
+            if (!tmp) { free(msg); return NULL; }
+            msg = tmp;
+        }
+        if (r->len > 0) memcpy(msg + len, r->chars, r->len);
+        len += r->len;
+        msg[len++] = '\n';
+    }
+
+    /* Trim trailing whitespace. */
+    while (len > 0 && (msg[len-1] == '\n' || msg[len-1] == ' '))
+        len--;
+    msg[len] = '\0';
+
+    if (len == 0) { free(msg); return NULL; }
+    return msg;
+}
+
+static void commit_execute(void) {
+    char *msg = commit_extract_message();
+    if (!msg) { status_err("Empty commit message — aborting"); return; }
+
+    char output[128];
+    int ok = git_commit(msg, output, sizeof(output));
+    free(msg);
+
+    if (ok) {
+        /* Close commit buffer and return to previous buffer. */
+        for (int i = 0; i < E.buf.numrows; i++) {
+            free(E.buf.rows[i].chars);
+            free(E.buf.rows[i].hl);
+        }
+        free(E.buf.rows);
+        free(E.buf.git_signs);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+        memset(&E.buftabs[E.cur_buftab], 0, sizeof(BufTab));
+
+        /* Switch back to previous buffer (buftab 0 as fallback). */
+        int prev = 0;
+        for (int i = E.num_buftabs - 1; i >= 0; i--) {
+            if (i != E.cur_buftab && (E.buftabs[i].buf.rows ||
+                i == 0)) { prev = i; break; }
+        }
+        E.num_buftabs--;
+        E.cur_buftab = prev;
+        E.panes[E.cur_pane].buf_idx = prev;
+        editor_buf_restore(prev);
+        editor_detect_syntax();
+        E.mode = MODE_NORMAL;
+
+        /* Update git branch (might have changed) and gutter. */
+        git_current_branch(E.git_branch, sizeof(E.git_branch));
+        editor_update_git_signs();
+
+        snprintf(E.statusmsg, sizeof(E.statusmsg), "%s", output);
+        E.statusmsg_is_error = 0;
+    } else {
+        status_err("Commit failed: %s", output);
+    }
+}
+
 /* ── Diff pane (HEAD vs working copy) ────────────────────────────────── */
 
 static int diff_pane_idx(void) {
@@ -2739,6 +2862,39 @@ void editor_execute_command(void) {
                 }
             }
 
+            /* ── commit buffer: :wq commits, :q aborts ────────────── */
+            if (E.buftabs[E.cur_buftab].is_commit) {
+                if (dw && dq) {
+                    commit_execute();
+                } else if (dq) {
+                    /* Abort: close commit buffer without committing. */
+                    for (int i = 0; i < E.buf.numrows; i++) {
+                        free(E.buf.rows[i].chars);
+                        free(E.buf.rows[i].hl);
+                    }
+                    free(E.buf.rows);
+                    free(E.buf.git_signs);
+                    memset(&E.buf, 0, sizeof(Buffer));
+                    E.buf.hl_dirty_from = INT_MAX;
+                    memset(&E.buftabs[E.cur_buftab], 0, sizeof(BufTab));
+                    int prev = 0;
+                    for (int i = E.num_buftabs - 1; i >= 0; i--) {
+                        if (i != E.cur_buftab && (E.buftabs[i].buf.rows ||
+                            i == 0)) { prev = i; break; }
+                    }
+                    E.num_buftabs--;
+                    E.cur_buftab = prev;
+                    E.panes[E.cur_pane].buf_idx = prev;
+                    editor_buf_restore(prev);
+                    editor_detect_syntax();
+                    E.mode = MODE_NORMAL;
+                    status_msg("Commit aborted");
+                } else if (dw) {
+                    status_err("Use :wq to commit or :q to abort");
+                }
+                goto done;
+            }
+
             /* ── write ─────────────────────────────────────────────── */
             if (dw) {
                 if (da) {
@@ -2904,6 +3060,11 @@ void editor_execute_command(void) {
         goto done;
     } else if (strcmp(cmd, "Grevert") == 0 || strcmp(cmd, "grevert") == 0) {
         hunk_revert();
+        goto done;
+
+    /* ── :Gcommit ──────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "Gcommit") == 0 || strcmp(cmd, "gcommit") == 0) {
+        commit_open();
         goto done;
 
     /* ── :Gblame ────────────────────────────────────────────────────── */
