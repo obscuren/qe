@@ -46,6 +46,7 @@ typedef struct {
     int        is_diff;   /* 1 = this slot holds a HEAD diff buffer   */
     int        diff_source_buf;  /* buf_idx of the working file (scroll sync) */
     int        is_commit; /* 1 = this slot holds a git commit message buffer */
+    int        is_show;   /* 1 = this slot holds a git-show commit buffer    */
     int        is_log;    /* 1 = this slot holds the git log buffer          */
     GitLogEntry *log_entries; /* non-NULL when is_log == 1                   */
     int         log_count;

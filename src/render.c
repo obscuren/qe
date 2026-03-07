@@ -338,14 +338,15 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int is_diff      = E.buftabs[p->buf_idx].is_diff;
     int is_commit    = E.buftabs[p->buf_idx].is_commit;
     int is_log       = E.buftabs[p->buf_idx].is_log;
-    int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log;
+    int is_show      = E.buftabs[p->buf_idx].is_show;
+    int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log || is_show;
     int gw           = no_gutter ? 0 : gutter_width_for(buf, p->buf_idx);
     int has_marks    = no_gutter ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
 
     /* Determine if this pane should show diff background highlighting.
        True for the diff pane itself, and for the source pane of an active diff. */
-    int show_diff_bg = is_diff;
+    int show_diff_bg = is_diff || is_show;
     if (!show_diff_bg) {
         for (int di = 0; di < E.num_panes; di++) {
             BufTab *dbt = &E.buftabs[E.panes[di].buf_idx];
@@ -822,6 +823,25 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         int llen = snprintf(left, sizeof(left),
                             " [Git Log] %d commits", lc);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Git show (commit diff) pane: status bar. */
+    if (E.buftabs[p->buf_idx].is_show) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        char left[128], right[16];
+        const char *fn = buf->filename ? buf->filename : "";
+        int llen = snprintf(left, sizeof(left), " %s", fn);
+        int rlen = snprintf(right, sizeof(right), "%d/%d", pcy + 1, buf->numrows);
         if (llen > p->width) llen = p->width;
         ab_append(ab, left, llen);
         int gap = p->width - llen - rlen;

@@ -1993,6 +1993,25 @@ static void log_show_commit(const char *hash) {
     }
     free(lines);
     E.buftabs[cidx].buf.dirty = 0;
+    E.buftabs[cidx].is_show = 1;
+
+    /* Build git_signs from diff line prefixes for background highlighting. */
+    Buffer *cb = &E.buftabs[cidx].buf;
+    cb->git_signs = calloc(cb->numrows, 1);
+    cb->git_signs_count = cb->numrows;
+    int in_diff = 0;
+    for (int i = 0; i < cb->numrows; i++) {
+        const char *ln = cb->rows[i].chars;
+        int len = cb->rows[i].len;
+        if (len >= 4 && strncmp(ln, "diff ", 5) == 0) in_diff = 1;
+        if (!in_diff) continue;
+        if (len > 0 && ln[0] == '+' && !(len >= 3 && ln[1] == '+' && ln[2] == '+'))
+            cb->git_signs[i] = GIT_SIGN_ADD;
+        else if (len > 0 && ln[0] == '-' && !(len >= 3 && ln[1] == '-' && ln[2] == '-'))
+            cb->git_signs[i] = GIT_SIGN_DEL;
+        else if (len >= 2 && ln[0] == '@' && ln[1] == '@')
+            cb->git_signs[i] = GIT_SIGN_MOD;
+    }
 
     /* Set a descriptive filename. */
     char name[64];
