@@ -3228,6 +3228,20 @@ static void handle_mouse_press(void) {
     /* Click on status bar row: just focus, don't move cursor. */
     if (my == p->top + p->height) return;
 
+    /* Tree pane: move cursor to clicked row; click on current row activates. */
+    if (E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree) {
+        int filerow = (my - p->top) + E.rowoff;
+        if (filerow < 0) filerow = 0;
+        if (E.buf.numrows > 0 && filerow >= E.buf.numrows)
+            filerow = E.buf.numrows - 1;
+        int was_same = (filerow == E.cy);
+        E.cy = filerow;
+        E.cx = 0;
+        if (was_same && filerow > 0)   /* second click on same row = open/toggle */
+            tree_activate_entry();
+        return;
+    }
+
     /* Convert terminal coords to file coords. */
     int gw      = gutter_width_for_buf(&E.buf);
     int filerow = (my - p->top) + E.rowoff;
