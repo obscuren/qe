@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render.h"
+#include "claude.h"
 #include "editor.h"
 #include "fuzzy.h"
 #include "git.h"
@@ -437,7 +438,9 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int is_commit    = E.buftabs[p->buf_idx].is_commit;
     int is_log       = E.buftabs[p->buf_idx].is_log;
     int is_show      = E.buftabs[p->buf_idx].is_show;
-    int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log || is_show;
+    int is_claude    = E.buftabs[p->buf_idx].is_claude;
+    int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log || is_show
+                    || is_claude;
     int gw           = no_gutter ? 0 : gutter_width_for(buf, p->buf_idx);
     int has_marks    = no_gutter ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
@@ -569,6 +572,31 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 ab_append(ab, "\x1b[33m", 5);      /* yellow */
             else if (gs == 'D')
                 ab_append(ab, "\x1b[31m", 5);      /* red */
+
+            ab_append(ab, row->chars, rlen);
+            ab_append(ab, "\x1b[m", 3);
+            continue;
+        }
+
+        /* Claude chat pane: colored messages. */
+        if (is_claude && filerow < buf->numrows) {
+            Row *row = &buf->rows[filerow];
+            int avail = p->width;
+            int rlen = row->len < avail ? row->len : avail;
+
+            /* User prompt lines (starting with "You: ") in green. */
+            if (row->len >= 4 && strncmp(row->chars, "You:", 4) == 0)
+                ab_append(ab, "\x1b[32;1m", 7);  /* bold green */
+            /* Error lines in red. */
+            else if (row->len >= 7 && strncmp(row->chars, "[Error]", 7) == 0)
+                ab_append(ab, "\x1b[31;1m", 7);  /* bold red */
+            /* Status lines in dim. */
+            else if (row->len >= 6 && (strncmp(row->chars, "[Done]", 6) == 0
+                     || strncmp(row->chars, "Waiting", 7) == 0))
+                ab_append(ab, "\x1b[2m", 4);     /* dim */
+            /* Response text in cyan. */
+            else if (row->len > 0)
+                ab_append(ab, "\x1b[36m", 5);     /* cyan */
 
             ab_append(ab, row->chars, rlen);
             ab_append(ab, "\x1b[m", 3);
@@ -809,6 +837,20 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                     ab_append(ab, finfo, flen);
                 }
             }
+
+            /* Ghost text: dim overlay after cursor on the matching row. */
+            if (E.ghost_valid && E.ghost_text && filerow == E.ghost_row
+                && p->buf_idx == E.cur_buftab) {
+                int glen = (int)strlen(E.ghost_text);
+                if (glen > 0) {
+                    ab_append(ab, "\x1b[2;37m", 6);  /* dim gray */
+                    int max_ghost = content_cols - (row->len - pco);
+                    if (max_ghost > glen) max_ghost = glen;
+                    if (max_ghost > 0)
+                        ab_append(ab, E.ghost_text, max_ghost);
+                    ab_append(ab, "\x1b[m", 3);
+                }
+            }
         }
 
         /* Advance fr: if this row is a closed fold, skip its body. */
@@ -984,6 +1026,31 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         const char *fn = buf->filename ? buf->filename : "";
         int llen = snprintf(left, sizeof(left), " %s", fn);
         int rlen = snprintf(right, sizeof(right), "%d/%d", pcy + 1, buf->numrows);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Claude chat pane: status bar. */
+    if (E.buftabs[p->buf_idx].is_claude) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        ClaudeState *cs = E.buftabs[p->buf_idx].claude;
+        const char *state = "idle";
+        if (cs) {
+            if (cs->error) state = "error";
+            else if (cs->done) state = "done";
+            else state = "streaming...";
+        }
+        char left[128], right[16];
+        int llen = snprintf(left, sizeof(left), " [Claude] %s", state);
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
         if (llen > p->width) llen = p->width;
         ab_append(ab, left, llen);
         int gap = p->width - llen - rlen;

@@ -74,6 +74,12 @@ static int l_set_option(lua_State *LS) {
         else luaL_error(LS, "term_height must be 3-50");
     } else if (strcmp(name, "autopairs") == 0) {
         E.opts.autopairs = lua_toboolean(LS, 2);
+    } else if (strcmp(name, "claude_api_key") == 0) {
+        const char *v = luaL_checkstring(LS, 2);
+        snprintf(E.claude_api_key, sizeof(E.claude_api_key), "%s", v);
+    } else if (strcmp(name, "claude_model") == 0) {
+        const char *v = luaL_checkstring(LS, 2);
+        snprintf(E.claude_model, sizeof(E.claude_model), "%s", v);
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }

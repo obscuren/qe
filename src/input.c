@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "input.h"
+#include "claude.h"
 #include "editor.h"
 #include "fuzzy.h"
 #include "git.h"
@@ -13,6 +14,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <poll.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -3173,6 +3175,36 @@ static int open_new_buf(const char *filename) {
     return 1;
 }
 
+/* Close a Claude chat buffer at buftab index `bi` and its pane.
+   Same pattern as term_close_buf. */
+static void claude_close_buf(int bi) {
+    claude_state_free(E.buftabs[bi].claude);
+    E.buftabs[bi].claude = NULL;
+    E.buftabs[bi].is_claude = 0;
+
+    int pane_idx = -1;
+    for (int pi = 0; pi < E.num_panes; pi++)
+        if (E.panes[pi].buf_idx == bi) { pane_idx = pi; break; }
+
+    if (E.num_panes > 1 && pane_idx >= 0) {
+        if (pane_idx != E.cur_pane)
+            pane_activate(pane_idx);
+        int closing_buf = E.cur_buftab;
+        pane_close(E.cur_pane);
+        buf_free(&E.buftabs[closing_buf].buf);
+        for (int si = closing_buf; si < E.num_buftabs - 1; si++)
+            E.buftabs[si] = E.buftabs[si + 1];
+        memset(&E.buftabs[E.num_buftabs - 1], 0, sizeof(BufTab));
+        E.num_buftabs--;
+        for (int pi = 0; pi < E.num_panes; pi++)
+            if (E.panes[pi].buf_idx > closing_buf)
+                E.panes[pi].buf_idx--;
+        if (E.cur_buftab > closing_buf) E.cur_buftab--;
+    } else {
+        editor_quit();
+    }
+}
+
 /* Open an embedded terminal in a horizontal split below the current pane. */
 /* Close terminal buffer at buftab index `bi` and its pane (if multi-pane).
    If it's the last pane, quits the editor. */
@@ -3265,6 +3297,236 @@ static void editor_open_terminal(const char *cmd) {
     E.mode = MODE_INSERT;  /* start in terminal-insert (keys go to PTY) */
 }
 
+/* ── Claude chat pane ────────────────────────────────────────────────── */
+
+/* claude_update_buf() is in claude.c */
+
+/* Find an existing Claude chat pane, or -1. */
+static int claude_find_pane(void) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].is_claude) return i;
+    return -1;
+}
+
+/* Find an existing Claude buftab, or -1. */
+static int claude_find_buftab(void) {
+    for (int i = 0; i < E.num_buftabs; i++)
+        if (E.buftabs[i].is_claude) return i;
+    return -1;
+}
+
+/* Open the Claude chat pane and send a prompt. */
+static void editor_open_claude(const char *prompt) {
+    if (E.num_buftabs >= MAX_BUFS) {
+        status_err("Too many open buffers (max %d)", MAX_BUFS);
+        return;
+    }
+
+    /* If a Claude pane already exists, reuse it. */
+    int existing = claude_find_buftab();
+    if (existing >= 0) {
+        /* Free the old state. */
+        claude_state_free(E.buftabs[existing].claude);
+        E.buftabs[existing].claude = claude_state_new();
+        if (!E.buftabs[existing].claude) { status_err("OOM"); return; }
+
+        /* Copy pending context. */
+        ClaudeState *cs = E.buftabs[existing].claude;
+        if (E.claude_ctx_count > 0) {
+            cs->context_files = malloc(sizeof(char *) * E.claude_ctx_count);
+            cs->context_count = E.claude_ctx_count;
+            for (int i = 0; i < E.claude_ctx_count; i++)
+                cs->context_files[i] = strdup(E.claude_context[i]);
+        }
+
+        /* Also add current buffer as context if it has a filename. */
+        if (E.buf.filename && !E.buftabs[E.cur_buftab].is_claude) {
+            cs->context_files = realloc(cs->context_files,
+                sizeof(char *) * (cs->context_count + 1));
+            cs->context_files[cs->context_count++] = strdup(E.buf.filename);
+        }
+
+        /* Send the new message. */
+        if (claude_send_message(cs, prompt, E.claude_api_key, E.claude_model) == 0) {
+            /* Save prompt for display in the buffer. */
+            free(E.buftabs[existing].buf.filename);
+            char title[128];
+            snprintf(title, sizeof(title), "[Claude]");
+            E.buftabs[existing].buf.filename = strdup(title);
+        }
+
+        /* Update buffer content. */
+        claude_update_buf(&E.buftabs[existing].buf, cs, prompt);
+
+        /* Switch to the Claude pane if not already there. */
+        int cpane = claude_find_pane();
+        if (cpane >= 0 && cpane != E.cur_pane) {
+            pane_activate(cpane);
+        }
+        /* Scroll to bottom. */
+        E.cy = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+        E.cx = 0;
+
+        /* Clear pending context. */
+        for (int i = 0; i < E.claude_ctx_count; i++)
+            free(E.claude_context[i]);
+        free(E.claude_context);
+        E.claude_context   = NULL;
+        E.claude_ctx_count = 0;
+        return;
+    }
+
+    /* Create a new Claude chat pane (horizontal split below). */
+    pane_save_cursor();
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    Pane *sp = &E.panes[E.cur_pane];
+    int H = sp->height;
+    int ch = H / 3;  /* Claude pane gets 1/3 of height */
+    if (ch < 5) ch = 5;
+    if (ch > H - 3) ch = H - 3;
+    if (ch < 1) { status_err("Pane too small for Claude chat"); return; }
+    int h_top = H - 1 - ch;  /* -1 for top pane's status bar */
+
+    /* Insert new pane slot after current. */
+    for (int i = E.num_panes; i > E.cur_pane + 1; i--)
+        E.panes[i] = E.panes[i - 1];
+    E.num_panes++;
+    sp->height = h_top;
+    Pane *np   = &E.panes[E.cur_pane + 1];
+    *np        = *sp;
+    np->top    = sp->top + h_top + 1;
+    np->height = ch;
+
+    /* Allocate new buffer slot. */
+    int idx = E.num_buftabs++;
+    memset(&E.buftabs[idx], 0, sizeof(BufTab));
+
+    /* Activate the new bottom pane and assign the Claude buffer. */
+    int new_pane = E.cur_pane + 1;
+
+    /* Remember the current content buffer filename for context. */
+    char *cur_filename = NULL;
+    if (E.buf.filename && !buftab_is_special(&E.buftabs[E.cur_buftab]))
+        cur_filename = strdup(E.buf.filename);
+
+    pane_activate(new_pane);
+    editor_buf_save(E.cur_buftab);
+    E.cur_buftab = idx;
+    E.panes[E.cur_pane].buf_idx = idx;
+    editor_buf_restore(idx);
+    buf_init(&E.buf);
+    E.buf.filename = strdup("[Claude]");
+
+    /* Create Claude state. */
+    ClaudeState *cs = claude_state_new();
+    if (!cs) { status_err("OOM"); free(cur_filename); return; }
+
+    /* Copy pending context files. */
+    if (E.claude_ctx_count > 0) {
+        cs->context_files = malloc(sizeof(char *) * E.claude_ctx_count);
+        cs->context_count = E.claude_ctx_count;
+        for (int i = 0; i < E.claude_ctx_count; i++)
+            cs->context_files[i] = strdup(E.claude_context[i]);
+    }
+
+    /* Add current buffer as context. */
+    if (cur_filename) {
+        cs->context_files = realloc(cs->context_files,
+            sizeof(char *) * (cs->context_count + 1));
+        cs->context_files[cs->context_count++] = cur_filename;
+    }
+
+    E.buftabs[idx].is_claude = 1;
+    E.buftabs[idx].claude    = cs;
+
+    /* Send the message. */
+    claude_send_message(cs, prompt, E.claude_api_key, E.claude_model);
+
+    /* Populate buffer with initial content. */
+    claude_update_buf(&E.buf, cs, prompt);
+
+    E.cy = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+    E.cx = 0;
+    E.mode = MODE_NORMAL;
+
+    /* Clear pending context. */
+    for (int i = 0; i < E.claude_ctx_count; i++)
+        free(E.claude_context[i]);
+    free(E.claude_context);
+    E.claude_context   = NULL;
+    E.claude_ctx_count = 0;
+}
+
+/* Apply code blocks from the last Claude response to the buffer that was
+   active when the Claude pane opened (the content pane above). */
+static void editor_claude_apply(void) {
+    int ci = claude_find_buftab();
+    if (ci < 0) { status_err("No Claude chat open"); return; }
+    ClaudeState *cs = E.buftabs[ci].claude;
+    if (!cs || !cs->response || cs->resp_len == 0) {
+        status_err("No Claude response to apply");
+        return;
+    }
+
+    int block_count = 0;
+    char **blocks = claude_extract_code_blocks(cs->response, &block_count);
+    if (block_count == 0) {
+        status_err("No code blocks found in response");
+        free(blocks);
+        return;
+    }
+
+    /* Switch to a content pane to apply the code. */
+    int target_pane = -1;
+    for (int i = 0; i < E.num_panes; i++) {
+        if (!buftab_is_special(&E.buftabs[E.panes[i].buf_idx])) {
+            target_pane = i;
+            break;
+        }
+    }
+    if (target_pane < 0) {
+        status_err("No content buffer to apply to");
+        for (int i = 0; i < block_count; i++) free(blocks[i]);
+        free(blocks);
+        return;
+    }
+
+    if (target_pane != E.cur_pane)
+        pane_activate(target_pane);
+
+    /* Capture undo state before applying. */
+    push_undo();
+
+    /* Replace entire buffer content with the first code block.
+       (Simple strategy: replace all content; more sophisticated
+       matching could be added later.) */
+    for (int i = 0; i < E.buf.numrows; i++) {
+        free(E.buf.rows[i].chars);
+        free(E.buf.rows[i].hl);
+    }
+    free(E.buf.rows);
+    E.buf.rows    = NULL;
+    E.buf.numrows = 0;
+
+    /* Insert the code block line by line. */
+    const char *p = blocks[0];
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        buf_insert_row(&E.buf, E.buf.numrows, p, len);
+        p += len;
+        if (nl) p++;
+    }
+    E.buf.dirty++;
+    E.buf.hl_dirty_from = 0;
+    E.cy = 0; E.cx = 0;
+
+    status_msg("Applied code block (%d lines)", E.buf.numrows);
+
+    for (int i = 0; i < block_count; i++) free(blocks[i]);
+    free(blocks);
+}
+
 /* Close the current buffer.  force=0 guards against unsaved changes.
    Returns 1 if the editor should quit (last buffer was closed). */
 static int close_cur_buf(int force) {
@@ -3287,6 +3549,11 @@ static int close_cur_buf(int force) {
         term_emu_close(E.buftabs[E.cur_buftab].term);
         E.buftabs[E.cur_buftab].term = NULL;
         E.buftabs[E.cur_buftab].is_term = 0;
+    }
+    if (E.buftabs[E.cur_buftab].is_claude) {
+        claude_state_free(E.buftabs[E.cur_buftab].claude);
+        E.buftabs[E.cur_buftab].claude = NULL;
+        E.buftabs[E.cur_buftab].is_claude = 0;
     }
     buf_free(&E.buf);
     undo_stack_clear(&E.undo_stack);
@@ -3568,6 +3835,12 @@ void editor_execute_command(void) {
 
         if ((dw || dq) && (*p == '\0' || arg)) {
 
+            /* Claude pane: read-only; :q closes it. */
+            if (E.buftabs[E.cur_buftab].is_claude) {
+                if (dw) { status_err("Claude pane is read-only"); goto done; }
+                if (dq) { claude_close_buf(E.cur_buftab); goto done; }
+            }
+
             /* Tree pane is read-only; :q from tree closes sidebar or quits. */
             if (E.buftabs[E.cur_buftab].is_tree) {
                 if (dw) { status_err("Tree pane is read-only"); goto done; }
@@ -3726,6 +3999,8 @@ void editor_execute_command(void) {
                     editor_quit();
                 } else if (E.buftabs[E.cur_buftab].is_term) {
                     term_close_buf(E.cur_buftab);
+                } else if (E.buftabs[E.cur_buftab].is_claude) {
+                    claude_close_buf(E.cur_buftab);
                 } else if (E.num_panes > 1) {
                     /* Multiple panes: close this pane; buffer stays in list. */
                     pane_close(E.cur_pane);
@@ -3878,6 +4153,68 @@ void editor_execute_command(void) {
     /* ── :Fuzzy ─────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "Fuzzy") == 0 || strcmp(cmd, "fuzzy") == 0) {
         fuzzy_open();
+        goto done;
+
+    /* ── :Claude <prompt> ────────────────────────────────────────────── */
+    } else if (strncmp(cmd, "Claude ", 7) == 0 && cmd[7]) {
+        editor_open_claude(cmd + 7);
+        goto done;
+    } else if (strcmp(cmd, "Claude") == 0) {
+        status_err("Usage: :Claude <prompt>");
+        goto done;
+
+    /* ── :Ccontext <file> — add file to context ──────────────────────── */
+    } else if (strncmp(cmd, "Ccontext ", 9) == 0 && cmd[9]) {
+        const char *file = cmd + 9;
+        /* Verify file exists. */
+        struct stat st;
+        if (stat(file, &st) != 0) {
+            status_err("File not found: %s", file);
+            goto done;
+        }
+        E.claude_context = realloc(E.claude_context,
+            sizeof(char *) * (E.claude_ctx_count + 1));
+        E.claude_context[E.claude_ctx_count++] = strdup(file);
+        status_msg("Context: %s (%d file%s)", file, E.claude_ctx_count,
+                   E.claude_ctx_count > 1 ? "s" : "");
+        goto done;
+
+    /* ── :Capply — apply code blocks from last response ──────────────── */
+    } else if (strcmp(cmd, "Capply") == 0) {
+        editor_claude_apply();
+        goto done;
+
+    /* ── :Cexplain — explain current selection or buffer ──────────────── */
+    } else if (strcmp(cmd, "Cexplain") == 0) {
+        char prompt[512];
+        if (E.buf.filename)
+            snprintf(prompt, sizeof(prompt),
+                     "Explain the code in file %s", E.buf.filename);
+        else
+            snprintf(prompt, sizeof(prompt), "Explain this code");
+        editor_open_claude(prompt);
+        goto done;
+
+    /* ── :Cfix — ask Claude to fix the current file ──────────────────── */
+    } else if (strcmp(cmd, "Cfix") == 0) {
+        char prompt[512];
+        if (E.buf.filename)
+            snprintf(prompt, sizeof(prompt),
+                     "Fix any bugs or issues in file %s", E.buf.filename);
+        else
+            snprintf(prompt, sizeof(prompt), "Fix any bugs or issues in this code");
+        editor_open_claude(prompt);
+        goto done;
+
+    /* ── :Creview — ask Claude to review the current file ─────────────── */
+    } else if (strcmp(cmd, "Creview") == 0) {
+        char prompt[512];
+        if (E.buf.filename)
+            snprintf(prompt, sizeof(prompt),
+                     "Review the code in file %s for potential improvements", E.buf.filename);
+        else
+            snprintf(prompt, sizeof(prompt), "Review this code for potential improvements");
+        editor_open_claude(prompt);
         goto done;
 
     /* ── :grep [pattern [path]] ─────────────────────────────────────── */
@@ -4400,6 +4737,27 @@ static void editor_process_normal(int c) {
         }
         if (c == 'b') {
             fuzzy_open_buffers();
+            return;
+        }
+        if (c == 'c') {
+            /* <leader>c — toggle focus to/from Claude chat pane */
+            int cpane = claude_find_pane();
+            if (cpane >= 0) {
+                if (cpane == E.cur_pane) {
+                    /* Already in Claude pane — go back to last content pane. */
+                    if (E.last_content_pane < E.num_panes)
+                        pane_activate(E.last_content_pane);
+                } else {
+                    pane_activate(cpane);
+                }
+            } else {
+                status_err("No Claude chat open (use :Claude <prompt>)");
+            }
+            return;
+        }
+        if (c == 'a') {
+            /* <leader>a — apply last Claude suggestion */
+            editor_claude_apply();
             return;
         }
         if (!lua_bridge_call_key(MODE_NORMAL, LEADER_BASE + c))
@@ -5223,15 +5581,112 @@ static void editor_process_insert(int c) {
             break;
         }
 
-        case '\t': {
-            /* Insert spaces up to the next tab stop. */
-            int spaces = E.opts.tabwidth - (E.cx % E.opts.tabwidth);
-            for (int i = 0; i < spaces; i++)
-                editor_insert_char(' ');
+        case '\t':
+            if (E.ghost_valid && E.ghost_text && E.ghost_row == E.cy
+                && E.ghost_col == E.cx) {
+                /* Accept ghost text: insert it at cursor. */
+                for (int gi = 0; gi < (int)strlen(E.ghost_text); gi++)
+                    editor_insert_char(E.ghost_text[gi]);
+                free(E.ghost_text);
+                E.ghost_text  = NULL;
+                E.ghost_valid = 0;
+            } else {
+                /* Insert spaces up to the next tab stop. */
+                int spaces = E.opts.tabwidth - (E.cx % E.opts.tabwidth);
+                for (int i = 0; i < spaces; i++)
+                    editor_insert_char(' ');
+            }
             break;
-        }
+
+        case 12:  /* Ctrl-L: trigger inline completion */
+            if (E.claude_api_key[0]) {
+                /* Build a completion prompt from current buffer context. */
+                char prompt[1024];
+                /* Get the current line for context. */
+                const char *line = "";
+                if (E.cy < E.buf.numrows)
+                    line = E.buf.rows[E.cy].chars;
+                snprintf(prompt, sizeof(prompt),
+                         "Complete the following code. Return ONLY the completion text "
+                         "that should be inserted at the cursor position (column %d). "
+                         "Do not include any explanation or the existing code. "
+                         "Current line: %s", E.cx, line);
+
+                /* Find or create Claude state for ghost completion. */
+                ClaudeState *cs = claude_state_new();
+                if (cs) {
+                    /* Add current file as context. */
+                    if (E.buf.filename) {
+                        cs->context_files = malloc(sizeof(char *));
+                        cs->context_files[0] = strdup(E.buf.filename);
+                        cs->context_count = 1;
+                    }
+                    if (claude_send_message(cs, prompt,
+                            E.claude_api_key, E.claude_model) == 0) {
+                        /* Wait briefly for response (non-blocking poll). */
+                        /* The main loop will pick up the ghost text. */
+                        free(E.ghost_text);
+                        E.ghost_text  = NULL;
+                        E.ghost_valid = 0;
+                        E.ghost_row   = E.cy;
+                        E.ghost_col   = E.cx;
+
+                        /* Store the state temporarily — we'll poll it in main. */
+                        /* For now, store in a global-ish spot. */
+                        /* Note: we re-use the Claude buftab mechanism but
+                           without opening a visible pane. */
+                        int ci = claude_find_buftab();
+                        if (ci >= 0 && E.buftabs[ci].claude) {
+                            /* Attach to existing Claude buftab for polling. */
+                            claude_state_free(cs);
+                            status_msg("Use :Claude for inline completion context");
+                        } else {
+                            /* No Claude buftab — just do a quick sync read. */
+                            /* Poll the pipe for up to 3 seconds. */
+                            struct pollfd pfd = { .fd = cs->pipe_fd, .events = POLLIN };
+                            int timeout_ms = 3000;
+                            while (!cs->done && timeout_ms > 0) {
+                                int pr = poll(&pfd, 1, 100);
+                                if (pr > 0) claude_read_stream(cs);
+                                timeout_ms -= 100;
+                            }
+                            if (cs->response && cs->resp_len > 0) {
+                                /* Strip leading/trailing whitespace/newlines. */
+                                const char *start = cs->response;
+                                while (*start == '\n' || *start == '\r') start++;
+                                int end = (int)strlen(start);
+                                while (end > 0 && (start[end-1]=='\n' || start[end-1]=='\r'))
+                                    end--;
+                                /* Take just the first line for ghost text. */
+                                const char *nl = strchr(start, '\n');
+                                if (nl && (int)(nl - start) < end) end = (int)(nl - start);
+                                if (end > 0) {
+                                    E.ghost_text = malloc(end + 1);
+                                    memcpy(E.ghost_text, start, end);
+                                    E.ghost_text[end] = '\0';
+                                    E.ghost_row   = E.cy;
+                                    E.ghost_col   = E.cx;
+                                    E.ghost_valid = 1;
+                                }
+                            }
+                            claude_state_free(cs);
+                        }
+                    } else {
+                        claude_state_free(cs);
+                    }
+                }
+            } else {
+                status_err("Set claude_api_key first");
+            }
+            break;
 
         default:
+            /* Dismiss ghost text on any other key. */
+            if (E.ghost_valid) {
+                free(E.ghost_text);
+                E.ghost_text  = NULL;
+                E.ghost_valid = 0;
+            }
             if (c >= 32 && c < 127) {
                 if (E.opts.autoindent && is_close_bracket((char)c))
                     editor_close_bracket((char)c);

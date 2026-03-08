@@ -625,6 +625,50 @@ Fold code by indent level using `z`-prefixed commands:
 
 Folds are indent-based: `zc` on a line hides all subsequent lines with strictly greater indentation. Lines at the same or lesser indent level remain visible — for example, folding a function signature hides the body but leaves the closing brace visible. The fold header shows a dim `[N lines]` indicator after the line content. Cursor movement (`j`/`k`) skips over folded regions, and scrolling accounts for hidden lines. Blank lines within an indented block are included in the fold.
 
+## Claude AI Integration
+
+Quick Ed includes built-in Claude AI assistance. Set your API key via the `ANTHROPIC_API_KEY` environment variable:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Or configure it in Lua (overrides the env var):
+
+```lua
+qe.set_option("claude_api_key", "sk-ant-...")
+qe.set_option("claude_model", "claude-sonnet-4-20250514")  -- optional, this is the default
+```
+
+### Chat pane
+
+| Command                | Action                                       |
+|------------------------|----------------------------------------------|
+| `:Claude <prompt>`     | Open chat pane and send prompt to Claude      |
+| `:Cexplain`            | Explain the current file                     |
+| `:Cfix`                | Ask Claude to fix bugs in the current file   |
+| `:Creview`             | Ask Claude to review the current file        |
+| `:Ccontext <file>`     | Add a file to context for the next request   |
+| `:Capply`              | Apply first code block from response to buffer |
+| `<leader>c`            | Toggle focus to/from Claude chat pane        |
+| `<leader>a`            | Apply last Claude suggestion                 |
+
+The chat pane opens as a horizontal split below the current pane. Responses stream in real-time — the pane auto-scrolls as text arrives. User messages are shown in green, Claude's response in cyan, errors in red.
+
+The current buffer is automatically included as context. Add additional files with `:Ccontext` before sending your prompt.
+
+### Inline completion
+
+In **Insert mode**, press `Ctrl-L` to request an inline completion from Claude. A ghost text suggestion appears in dim gray after the cursor. Press `Tab` to accept the suggestion, or any other key to dismiss it.
+
+### Edit applicator
+
+After receiving a response with fenced code blocks, use `:Capply` (or `<leader>a`) to replace the current buffer content with the first code block from Claude's response. This is a single undo step — press `u` to revert.
+
+Uses `fork()+exec("curl")` for HTTP — no external C library dependencies. Requires `curl` to be available in `$PATH`.
+
+---
+
 ## Session Save / Restore
 
 | Command                | Action                                       |
@@ -654,6 +698,8 @@ Set editor options.
 | `tabwidth`        | integer | `4`     | Number of spaces inserted by Tab              |
 | `fuzzy_width_pct` | integer | `40`    | Fuzzy finder panel width as % of terminal     |
 | `autopairs`       | boolean | `true`  | Auto-close `()`, `{}`, `[]`, `""`, `''`       |
+| `claude_api_key`  | string  | `""`    | Anthropic API key for Claude AI integration   |
+| `claude_model`    | string  | `"claude-sonnet-4-20250514"` | Claude model to use         |
 
 ```lua
 qe.set_option("tabwidth", 2)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "terminal.h"
+#include "claude.h"
 #include "editor.h"
 #include "input.h"
 #include "render.h"
@@ -100,8 +101,33 @@ int main(int argc, char *argv[]) {
 
         editor_refresh_screen();
 
-        /* Build poll set: stdin + all terminal PTY fds. */
-        struct pollfd pfds[1 + MAX_BUFS];
+        /* Drain Claude streaming responses. */
+        for (int i = 0; i < E.num_buftabs; i++) {
+            if (E.buftabs[i].is_claude && E.buftabs[i].claude
+                && !E.buftabs[i].claude->done
+                && E.buftabs[i].claude->pipe_fd >= 0) {
+                ClaudeState *cs = E.buftabs[i].claude;
+                int got = claude_read_stream(cs);
+                if (got != 0) {
+                    /* Find the prompt text from the first row of the buffer. */
+                    const char *prompt = "...";
+                    Buffer *cbuf = (i == E.cur_buftab)
+                                   ? &E.buf : &E.buftabs[i].buf;
+                    if (cbuf->numrows > 0 && cbuf->rows[0].len > 5
+                        && strncmp(cbuf->rows[0].chars, "You: ", 5) == 0)
+                        prompt = cbuf->rows[0].chars + 5;
+                    claude_update_buf(cbuf, cs, prompt);
+                    /* Auto-scroll to bottom if Claude pane is active. */
+                    if (i == E.cur_buftab) {
+                        E.cy = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+                        E.cx = 0;
+                    }
+                }
+            }
+        }
+
+        /* Build poll set: stdin + all terminal PTY fds + Claude pipe fds. */
+        struct pollfd pfds[1 + MAX_BUFS * 2];
         int nfds = 0;
         pfds[nfds++] = (struct pollfd){ .fd = STDIN_FILENO, .events = POLLIN };
         for (int i = 0; i < E.num_buftabs; i++) {
@@ -110,15 +136,28 @@ int main(int argc, char *argv[]) {
                 pfds[nfds++] = (struct pollfd){
                     .fd = E.buftabs[i].term->pty_fd, .events = POLLIN };
         }
+        /* Add Claude pipe fds so poll wakes on streaming data. */
+        int has_claude_stream = 0;
+        for (int i = 0; i < E.num_buftabs; i++) {
+            if (E.buftabs[i].is_claude && E.buftabs[i].claude
+                && !E.buftabs[i].claude->done
+                && E.buftabs[i].claude->pipe_fd >= 0) {
+                pfds[nfds++] = (struct pollfd){
+                    .fd = E.buftabs[i].claude->pipe_fd, .events = POLLIN };
+                has_claude_stream = 1;
+            }
+        }
 
-        /* Wait for stdin OR any PTY output (or signal). */
-        int pr = poll(pfds, nfds, -1);
+        /* Wait for stdin OR any PTY/Claude output (or signal).
+           Use short timeout when streaming to keep UI responsive. */
+        int timeout = has_claude_stream ? 50 : -1;
+        int pr = poll(pfds, nfds, timeout);
         if (pr <= 0) continue;  /* signal interrupted or error — just re-loop */
 
         /* If stdin has data, process one keypress. */
         if (pfds[0].revents & POLLIN)
             editor_process_keypress();
-        /* PTY data (if any) will be drained at the top of the next iteration. */
+        /* PTY/Claude data (if any) will be drained at the top of the next iteration. */
     }
 
     return 0;

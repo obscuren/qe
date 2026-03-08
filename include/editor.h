@@ -3,6 +3,7 @@
 #define EDITOR_H
 
 #include "buf.h"
+#include "claude.h"
 #include "fuzzy.h"
 #include "git.h"
 #include "qf.h"
@@ -53,13 +54,16 @@ typedef struct {
     int         log_count;
     int        is_term;   /* 1 = this slot holds an embedded terminal       */
     TermState *term;      /* non-NULL when is_term == 1                     */
+    int        is_claude; /* 1 = this slot holds a Claude chat buffer       */
+    ClaudeState *claude;  /* non-NULL when is_claude == 1                   */
 } BufTab;
 
 /* True for any non-content buffer (tree, quickfix, git viewers, terminal…).
    Use this to skip special buffers in :ls, :bn/:bp, fuzzy picker, dirty checks, etc. */
 static inline int buftab_is_special(const BufTab *bt) {
     return bt->is_tree || bt->is_qf || bt->is_blame || bt->is_diff
-        || bt->is_commit || bt->is_show || bt->is_log || bt->is_term;
+        || bt->is_commit || bt->is_show || bt->is_log || bt->is_term
+        || bt->is_claude;
 }
 
 typedef enum {
@@ -229,6 +233,17 @@ typedef struct {
     char git_branch[64];    /* current branch name (empty if not a git repo) */
     int  pending_bracket;   /* ']' or '[' waiting for second key, 0 = none  */
     int  pending_leader_h;  /* 1 = <leader>h pressed, waiting for s/r       */
+
+    /* Claude AI integration */
+    char claude_api_key[256];
+    char claude_model[64];
+    char **claude_context;   /* pending context file paths for next request */
+    int    claude_ctx_count;
+
+    /* Inline completion ghost text */
+    char *ghost_text;        /* malloc'd completion suggestion     */
+    int   ghost_row, ghost_col; /* position where ghost text applies */
+    int   ghost_valid;       /* 1 when ghost_text is displayable   */
 } EditorConfig;
 
 extern EditorConfig E;

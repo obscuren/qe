@@ -5,6 +5,7 @@
 #include "utils.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -108,6 +109,20 @@ void editor_init(void) {
     E.pending_bracket  = 0;
     E.pending_leader_h = 0;
     git_current_branch(E.git_branch, sizeof(E.git_branch));
+
+    /* Claude AI */
+    const char *env_key = getenv("ANTHROPIC_API_KEY");
+    if (env_key)
+        snprintf(E.claude_api_key, sizeof(E.claude_api_key), "%s", env_key);
+    else
+        E.claude_api_key[0] = '\0';
+    strcpy(E.claude_model, "claude-sonnet-4-20250514");
+    E.claude_context   = NULL;
+    E.claude_ctx_count = 0;
+    E.ghost_text  = NULL;
+    E.ghost_row   = 0;
+    E.ghost_col   = 0;
+    E.ghost_valid = 0;
 }
 
 void editor_detect_syntax(void) {
