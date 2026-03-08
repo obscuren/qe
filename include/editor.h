@@ -69,6 +69,7 @@ typedef enum {
     MODE_SEARCH,
     MODE_VISUAL,       /* characterwise visual selection */
     MODE_VISUAL_LINE,  /* linewise visual selection      */
+    MODE_VISUAL_BLOCK, /* block (column) visual selection */
     MODE_FUZZY,        /* fuzzy file finder overlay      */
 } EditorMode;
 
@@ -122,6 +123,11 @@ typedef struct {
     /* Visual mode anchor */
     int visual_anchor_row;
     int visual_anchor_col;
+
+    /* Block-visual insert (Ctrl-V + I/A): applied to remaining rows on ESC. */
+    int block_insert_active;
+    int block_insert_r0, block_insert_r1;
+    int block_insert_col;
 
     /* Operator-pending state (normal mode) */
     char  pending_op;      /* 'd' or 'y' when waiting for motion; '\0' = none */
@@ -199,6 +205,7 @@ typedef struct {
     int    cur_pane;          /* index of active pane              */
     int    pending_ctrlw;     /* 1 = waiting for Ctrl-W second key */
     int    pending_g;         /* 1 = waiting for g second key      */
+    int    pending_z;         /* 1 = waiting for z second key      */
     int    pending_leader;    /* 1 = waiting for leader second key */
     char   leader_char;       /* the leader key (default ' ')      */
     int    last_content_pane; /* index of last non-tree active pane */

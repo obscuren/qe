@@ -43,6 +43,8 @@ void buf_init(Buffer *b) {
     b->hl_dirty_from   = INT_MAX;
     b->git_signs       = NULL;
     b->git_signs_count = 0;
+    b->folds           = NULL;
+    b->folds_cap       = 0;
 }
 
 void buf_free(Buffer *b) {
@@ -53,7 +55,59 @@ void buf_free(Buffer *b) {
     free(b->rows);
     free(b->filename);
     free(b->git_signs);
+    free(b->folds);
     buf_init(b);
+}
+
+/* ── Fold helpers ──────────────────────────────────────────────────────── */
+
+int buf_row_indent(const Row *row, int tabwidth) {
+    int indent = 0;
+    for (int i = 0; i < row->len; i++) {
+        if (row->chars[i] == ' ')        indent++;
+        else if (row->chars[i] == '\t')  indent += tabwidth - (indent % tabwidth);
+        else break;
+    }
+    return indent;
+}
+
+static int row_is_blank(const Row *row) {
+    for (int i = 0; i < row->len; i++)
+        if (row->chars[i] != ' ' && row->chars[i] != '\t') return 0;
+    return 1;
+}
+
+/* Find the last row belonging to the fold block starting at `start`.
+   A fold includes all subsequent rows with strictly greater indent
+   (blank lines are included if followed by more-indented content). */
+int buf_fold_end(const Buffer *buf, int start, int tabwidth) {
+    if (start >= buf->numrows - 1) return start;
+    int base = buf_row_indent(&buf->rows[start], tabwidth);
+    int last = start;
+    for (int r = start + 1; r < buf->numrows; r++) {
+        if (row_is_blank(&buf->rows[r])) continue;
+        if (buf_row_indent(&buf->rows[r], tabwidth) > base)
+            last = r;
+        else
+            break;
+    }
+    /* Include trailing blank lines between last indented line and the break. */
+    if (last > start) {
+        for (int r = last + 1; r < buf->numrows; r++) {
+            if (row_is_blank(&buf->rows[r])) last = r;
+            else break;
+        }
+    }
+    return last;
+}
+
+void buf_ensure_folds(Buffer *buf) {
+    if (buf->folds_cap >= buf->numrows) return;
+    int newcap = buf->numrows + 64;
+    buf->folds = realloc(buf->folds, newcap * sizeof(int8_t));
+    memset(buf->folds + buf->folds_cap, 0,
+           (newcap - buf->folds_cap) * sizeof(int8_t));
+    buf->folds_cap = newcap;
 }
 
 /* Insert a new row at position `at` initialised with s[0..len-1]. */

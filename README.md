@@ -258,9 +258,9 @@ Examples: `diw` (delete inner word), `ci"` (change inside quotes), `va(` (visual
 
 Bracket objects are multi-line aware and handle nesting. Dot-repeat works for all text-object delete/change operations.
 
-## Visual mode (`v` / `V`)
+## Visual mode (`v` / `V` / `Ctrl-V`)
 
-Press `v` for characterwise selection or `V` for linewise selection. The selection extends as you move the cursor using any normal-mode motion key. Press the same key again or `Esc` to cancel.
+Press `v` for characterwise selection, `V` for linewise selection, or `Ctrl-V` for block (column) selection. The selection extends as you move the cursor using any normal-mode motion key. Press the same key again or `Esc` to cancel. You can switch between modes by pressing the other key.
 
 | Key      | Action                                      |
 |----------|---------------------------------------------|
@@ -269,9 +269,14 @@ Press `v` for characterwise selection or `V` for linewise selection. The selecti
 | `c`      | Delete selection and enter Insert mode      |
 | `v`      | Toggle characterwise / cancel               |
 | `V`      | Toggle linewise / cancel                    |
+| `Ctrl-V` | Toggle block visual / cancel                |
+| `I`      | Block insert at left edge (block mode only) |
+| `A`      | Block append at right edge (block mode only)|
 | `Esc`    | Cancel selection, return to Normal          |
 
 All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) extend the selection.
+
+**Block visual mode** (`Ctrl-V`) selects a rectangular region. `I` inserts text at the left column of the block on all rows when you press `Esc`. `A` appends text at the right column.
 
 ## Entering Insert mode (Normal mode)
 
@@ -605,6 +610,29 @@ Type `/` in Normal mode, then enter a pattern and press `Enter`. The cursor jump
 Quick Ed highlights keywords, types, strings, numbers, and comments. Language definitions live in `~/.config/qe/languages/` and are loaded by `init.lua`. Supported out of the box: **C/C++**, **Lua**, **Markdown**.
 
 When the cursor is on a bracket (`(`, `)`, `[`, `]`, `{`, `}`), the matching counterpart is highlighted with a bright blue background and white text. The match search crosses line boundaries.
+
+## Code Folding
+
+Fold code by indent level using `z`-prefixed commands:
+
+| Key  | Action                                       |
+|------|----------------------------------------------|
+| `zc` | Close fold at cursor (hide indented block)   |
+| `zo` | Open fold at cursor                          |
+| `za` | Toggle fold at cursor                        |
+| `zM` | Close all folds in the buffer                |
+| `zR` | Open all folds in the buffer                 |
+
+Folds are indent-based: `zc` on a line hides all subsequent lines with strictly greater indentation. Lines at the same or lesser indent level remain visible — for example, folding a function signature hides the body but leaves the closing brace visible. The fold header shows a dim `[N lines]` indicator after the line content. Cursor movement (`j`/`k`) skips over folded regions, and scrolling accounts for hidden lines. Blank lines within an indented block are included in the fold.
+
+## Session Save / Restore
+
+| Command                | Action                                       |
+|------------------------|----------------------------------------------|
+| `:mksession [file]`   | Save session to file (default `Session.qe`)  |
+| `:source [file]`      | Restore session from file                    |
+
+A session file records the working directory, all open buffers (with cursor positions), and the active buffer. Special buffers (tree, terminal, quickfix, etc.) are excluded.
 
 ---
 

@@ -261,6 +261,64 @@ static void editor_delete_char(void) {
     }
 }
 
+/* ── Fold helpers ────────────────────────────────────────────────────── */
+
+/* Can this row be a fold header? (has subsequent rows with greater indent) */
+static int fold_can_fold(int row) {
+    if (row >= E.buf.numrows - 1) return 0;
+    return buf_fold_end(&E.buf, row, E.opts.tabwidth) > row;
+}
+
+static void fold_close(int row) {
+    if (!fold_can_fold(row)) return;
+    buf_ensure_folds(&E.buf);
+    E.buf.folds[row] = 1;
+}
+
+static void fold_open(int row) {
+    if (!E.buf.folds || row >= E.buf.folds_cap) return;
+    E.buf.folds[row] = 0;
+}
+
+/* Is the given row hidden inside a closed fold? */
+static int fold_row_hidden(int row) {
+    if (!E.buf.folds || row <= 0) return 0;
+    for (int r = 0; r < row; r++) {
+        if (r < E.buf.folds_cap && E.buf.folds[r]) {
+            int end = buf_fold_end(&E.buf, r, E.opts.tabwidth);
+            if (row <= end) return 1;
+            r = end; /* skip past this fold */
+        }
+    }
+    return 0;
+}
+
+/* Find the fold header that hides the given row, or -1. */
+static int fold_parent(int row) {
+    if (!E.buf.folds || row <= 0) return -1;
+    for (int r = row - 1; r >= 0; r--) {
+        if (r < E.buf.folds_cap && E.buf.folds[r]) {
+            int end = buf_fold_end(&E.buf, r, E.opts.tabwidth);
+            if (row <= end) return r;
+        }
+    }
+    return -1;
+}
+
+/* Move cursor to the next visible row (forward). */
+static void fold_skip_forward(void) {
+    while (E.cy < E.buf.numrows - 1 && fold_row_hidden(E.cy))
+        E.cy++;
+}
+
+/* Ensure E.cy is on a visible row after a fold toggle. */
+static void fold_fix_cursor(void) {
+    if (fold_row_hidden(E.cy)) {
+        int p = fold_parent(E.cy);
+        if (p >= 0) E.cy = p;
+    }
+}
+
 /* ── Word motion ─────────────────────────────────────────────────────── */
 
 /* Character class for word-motion purposes:
@@ -1115,6 +1173,7 @@ static void editor_paste(int before) {
 /* ── Visual mode ─────────────────────────────────────────────────────── */
 
 static void editor_move_cursor(int key);  /* forward declaration */
+static void enter_insert_mode(char entry); /* forward declaration */
 
 /* Return ordered selection bounds: [r0,c0] start, [r1,c1] end (inclusive). */
 static void visual_get_bounds(int *r0, int *c0, int *r1, int *c1) {
@@ -1203,6 +1262,59 @@ static void visual_op_change(void) {
     }
 }
 
+/* Block visual: get block bounds (rows r0..r1, columns lc..rc inclusive). */
+static void visual_block_bounds(int *r0, int *r1, int *lc, int *rc) {
+    int ar = E.visual_anchor_row, ac = E.visual_anchor_col;
+    int cr = E.cy, cc = E.cx;
+    *r0 = ar < cr ? ar : cr;
+    *r1 = ar > cr ? ar : cr;
+    *lc = ac < cc ? ac : cc;
+    *rc = ac > cc ? ac : cc;
+}
+
+static void visual_block_delete(void) {
+    int r0, r1, lc, rc;
+    visual_block_bounds(&r0, &r1, &lc, &rc);
+    push_undo();
+    E.mode = MODE_NORMAL;
+    for (int r = r0; r <= r1 && r < E.buf.numrows; r++) {
+        Row *row = &E.buf.rows[r];
+        int c0 = lc < row->len ? lc : row->len;
+        int c1 = (rc + 1) < row->len ? (rc + 1) : row->len;
+        for (int i = c1 - 1; i >= c0; i--)
+            buf_row_delete_char(row, i);
+        E.buf.dirty++;
+        buf_mark_hl_dirty(&E.buf, r);
+    }
+    E.cy = r0; E.cx = lc;
+    status_msg("%d lines block-deleted", r1 - r0 + 1);
+}
+
+static void visual_block_insert(int append) {
+    int r0, r1, lc, rc;
+    visual_block_bounds(&r0, &r1, &lc, &rc);
+    int col = append ? rc + 1 : lc;
+
+    /* Capture undo before any changes. */
+    E.pre_insert_snapshot = editor_capture_state();
+    E.pre_insert_dirty    = E.buf.dirty;
+    E.has_pre_insert      = 1;
+
+    /* Position cursor at the insert column of the first row. */
+    E.cy = r0; E.cx = col;
+    if (E.cy < E.buf.numrows && E.cx > E.buf.rows[E.cy].len)
+        E.cx = E.buf.rows[E.cy].len;
+
+    /* Save block info for applying to remaining rows on ESC. */
+    E.block_insert_r0 = r0;
+    E.block_insert_r1 = r1;
+    E.block_insert_col = col;
+    E.block_insert_active = 1;
+
+    E.mode = MODE_INSERT;
+    enter_insert_mode('i');
+}
+
 static void editor_process_visual(int c) {
     if (lua_bridge_call_key(E.mode, c)) return;
 
@@ -1231,9 +1343,16 @@ static void editor_process_visual(int c) {
             E.mode = (E.mode == MODE_VISUAL_LINE) ? MODE_NORMAL : MODE_VISUAL_LINE;
             break;
 
+        case 0x16:  /* Ctrl-V: toggle block visual */
+            E.mode = (E.mode == MODE_VISUAL_BLOCK) ? MODE_NORMAL : MODE_VISUAL_BLOCK;
+            break;
+
         case 'd':
         case 'x':
-            visual_op_delete();
+            if (E.mode == MODE_VISUAL_BLOCK)
+                visual_block_delete();
+            else
+                visual_op_delete();
             break;
 
         case 'y':
@@ -1241,7 +1360,20 @@ static void editor_process_visual(int c) {
             break;
 
         case 'c':
-            visual_op_change();
+            if (E.mode == MODE_VISUAL_BLOCK)
+                visual_block_delete();   /* delete block, then fall into insert */
+            else
+                visual_op_change();
+            break;
+
+        case 'I':  /* Block insert at left edge. */
+            if (E.mode == MODE_VISUAL_BLOCK)
+                visual_block_insert(0);
+            break;
+
+        case 'A':  /* Block append at right edge. */
+            if (E.mode == MODE_VISUAL_BLOCK)
+                visual_block_insert(1);
             break;
 
         case '>':
@@ -1297,7 +1429,7 @@ static void editor_process_visual(int c) {
             if (nk == '\x1b') break;
             int r0, c0, r1, c1;
             if (!text_object_range((char)c, (char)nk, &r0, &c0, &r1, &c1)) break;
-            if (E.mode == MODE_VISUAL_LINE) E.mode = MODE_VISUAL;
+            if (E.mode == MODE_VISUAL_LINE || E.mode == MODE_VISUAL_BLOCK) E.mode = MODE_VISUAL;
             E.visual_anchor_row = r0;
             E.visual_anchor_col = c0;
             E.cy = r1;
@@ -1361,12 +1493,28 @@ static void editor_move_cursor(int key) {
             break;
         case ARROW_UP:
         case 'k':
-            if (E.cy > 0) E.cy--;
+            if (E.cy > 0) {
+                E.cy--;
+                /* Skip over folded rows (land on the fold header). */
+                if (fold_row_hidden(E.cy)) {
+                    int p = fold_parent(E.cy);
+                    if (p >= 0) E.cy = p;
+                }
+            }
             s_vertical_move = 1;
             break;
         case ARROW_DOWN:
         case 'j':
-            if (E.cy < E.buf.numrows - 1) E.cy++;
+            if (E.cy < E.buf.numrows - 1) {
+                /* If on a closed fold header, skip past the fold. */
+                if (E.buf.folds && E.cy < E.buf.folds_cap && E.buf.folds[E.cy]) {
+                    int end = buf_fold_end(&E.buf, E.cy, E.opts.tabwidth);
+                    E.cy = (end + 1 < E.buf.numrows) ? end + 1 : E.cy;
+                } else {
+                    E.cy++;
+                    fold_skip_forward();
+                }
+            }
             s_vertical_move = 1;
             break;
         case HOME_KEY:
@@ -3187,6 +3335,89 @@ static int close_cur_buf(int force) {
     return 0;
 }
 
+/* ── Session save / restore ──────────────────────────────────────────── */
+
+static void editor_save_session(const char *path) {
+    FILE *fp = fopen(path, "w");
+    if (!fp) { status_err("Cannot write %s", path); return; }
+
+    /* Save CWD. */
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd)))
+        fprintf(fp, "cd %s\n", cwd);
+
+    /* Save all non-special buffers. */
+    for (int i = 0; i < E.num_buftabs; i++) {
+        if (buftab_is_special(&E.buftabs[i])) continue;
+        const Buffer *b = (i == E.cur_buftab) ? &E.buf : &E.buftabs[i].buf;
+        if (!b->filename) continue;
+        int cx = (i == E.cur_buftab) ? E.cx : E.buftabs[i].cx;
+        int cy = (i == E.cur_buftab) ? E.cy : E.buftabs[i].cy;
+        fprintf(fp, "buf %d %d %s\n", cy, cx, b->filename);
+    }
+
+    /* Mark the active buffer. */
+    fprintf(fp, "active %d\n", E.cur_buftab);
+
+    fclose(fp);
+    status_msg("Session saved to %s", path);
+}
+
+static void editor_load_session(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) { status_err("Cannot read %s", path); return; }
+
+    char line[PATH_MAX + 64];
+    int first = 1;
+    int target_active = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        /* Strip trailing newline. */
+        int len = (int)strlen(line);
+        if (len > 0 && line[len-1] == '\n') line[--len] = '\0';
+
+        if (strncmp(line, "cd ", 3) == 0) {
+            chdir(line + 3);
+        } else if (strncmp(line, "buf ", 4) == 0) {
+            int cy, cx;
+            char fname[PATH_MAX];
+            if (sscanf(line + 4, "%d %d %[^\n]", &cy, &cx, fname) == 3) {
+                /* Check if file exists. */
+                struct stat st;
+                if (stat(fname, &st) != 0) continue;
+
+                if (first) {
+                    /* Open in the current (live) buffer slot. */
+                    buf_free(&E.buf);
+                    buf_open(&E.buf, fname);
+                    editor_detect_syntax();
+                    E.cy = cy; E.cx = cx;
+                    if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
+                        E.cy = E.buf.numrows - 1;
+                    first = 0;
+                } else {
+                    open_new_buf(fname);
+                    /* Restore cursor position in the newly opened buffer. */
+                    E.cy = cy; E.cx = cx;
+                    if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
+                        E.cy = E.buf.numrows - 1;
+                }
+            }
+        } else if (strncmp(line, "active ", 7) == 0) {
+            target_active = atoi(line + 7);
+        }
+    }
+    fclose(fp);
+
+    /* Switch to the saved active buffer. */
+    if (target_active >= 0 && target_active < E.num_buftabs
+        && !buftab_is_special(&E.buftabs[target_active])
+        && target_active != E.cur_buftab) {
+        switch_to_buf(target_active);
+    }
+    status_msg("Session loaded from %s", path);
+}
+
 /* ── Substitute helpers ──────────────────────────────────────────────── */
 
 /* Parse a substitute command of the form [%|N[,M]]s/pat/rep/[flags].
@@ -3909,6 +4140,20 @@ void editor_execute_command(void) {
         E.opts.line_numbers = 0;
         status_msg("Line numbers off");
 
+    /* ── :mksession [file] ────────────────────────────────────────── */
+    } else if (strncmp(cmd, "mksession", 9) == 0 &&
+               (cmd[9] == '\0' || cmd[9] == ' ')) {
+        const char *path = (cmd[9] == ' ' && cmd[10]) ? cmd + 10 : "Session.qe";
+        editor_save_session(path);
+        goto done;
+
+    /* ── :source [file] — restore session ─────────────────────────── */
+    } else if (strncmp(cmd, "source", 6) == 0 &&
+               (cmd[6] == '\0' || cmd[6] == ' ')) {
+        const char *path = (cmd[6] == ' ' && cmd[7]) ? cmd + 7 : "Session.qe";
+        editor_load_session(path);
+        goto done;
+
     } else {
         /* ── :s / :%s / :N,Ms — substitute ──────────────────────────── */
         const char *pat; int pat_len;
@@ -4057,6 +4302,40 @@ static void editor_process_normal(int c) {
                 E.cy = E.buf.numrows - 1;
             s_vertical_move = 1;
             apply_preferred_col();
+        }
+        return;
+    }
+
+    /* z second-key dispatch (fold commands). */
+    if (E.pending_z) {
+        E.pending_z = 0;
+        E.count = 0;
+        switch (c) {
+            case 'c':  /* zc — close fold at cursor */
+                fold_close(E.cy);
+                break;
+            case 'o':  /* zo — open fold at cursor */
+                fold_open(E.cy);
+                break;
+            case 'a':  /* za — toggle fold at cursor */
+                if (E.buf.folds && E.cy < E.buf.folds_cap && E.buf.folds[E.cy])
+                    fold_open(E.cy);
+                else
+                    fold_close(E.cy);
+                break;
+            case 'M':  /* zM — close all folds */
+                buf_ensure_folds(&E.buf);
+                for (int r = 0; r < E.buf.numrows; r++)
+                    if (fold_can_fold(r)) E.buf.folds[r] = 1;
+                fold_fix_cursor();
+                break;
+            case 'R':  /* zR — open all folds */
+                if (E.buf.folds)
+                    memset(E.buf.folds, 0, E.buf.folds_cap * sizeof(int8_t));
+                break;
+            default:
+                status_err("Unknown z command");
+                break;
         }
         return;
     }
@@ -4528,6 +4807,12 @@ static void editor_process_normal(int c) {
             E.mode = MODE_VISUAL_LINE;
             break;
 
+        case 0x16:  /* Ctrl-V: block visual mode */
+            E.visual_anchor_row = E.cy;
+            E.visual_anchor_col = E.cx;
+            E.mode = MODE_VISUAL_BLOCK;
+            break;
+
         /* --- paste n times --- */
         case 'p':
             for (int i = 0; i < n; i++) editor_paste(0);
@@ -4772,6 +5057,11 @@ static void editor_process_normal(int c) {
             E.pending_g = 1;
             break;
 
+        /* --- z prefix (fold commands) --- */
+        case 'z':
+            E.pending_z = 1;
+            break;
+
         /* --- ] / [ prefix (hunk navigation) --- */
         case ']':
         case '[':
@@ -4890,6 +5180,25 @@ static void editor_process_insert(int c) {
                     undo_state_free(&E.pre_insert_snapshot);
                 }
                 E.has_pre_insert = 0;
+            }
+            /* Block-visual insert: apply recorded text to remaining rows. */
+            if (E.block_insert_active && E.insert_rec_len > 0) {
+                E.block_insert_active = 0;
+                int col = E.block_insert_col;
+                for (int r = E.block_insert_r0; r <= E.block_insert_r1
+                         && r < E.buf.numrows; r++) {
+                    if (r == E.block_insert_r0) continue; /* already edited */
+                    Row *row = &E.buf.rows[r];
+                    /* Pad with spaces if row is shorter than insert column. */
+                    while (row->len < col)
+                        buf_row_insert_char(row, row->len, ' ');
+                    for (int i = 0; i < E.insert_rec_len; i++)
+                        buf_row_insert_char(row, col + i, E.insert_rec[i]);
+                    E.buf.dirty++;
+                    buf_mark_hl_dirty(&E.buf, r);
+                }
+            } else {
+                E.block_insert_active = 0;
             }
             editor_update_git_signs();
             break;
@@ -5149,7 +5458,7 @@ static void handle_mouse_press(void) {
 
     /* If in insert/visual mode, return to normal first. */
     if (E.mode == MODE_INSERT || E.mode == MODE_VISUAL ||
-        E.mode == MODE_VISUAL_LINE) {
+        E.mode == MODE_VISUAL_LINE || E.mode == MODE_VISUAL_BLOCK) {
         E.mode = MODE_NORMAL;
         if (E.cx > 0 && E.cy < E.buf.numrows &&
             E.cx >= E.buf.rows[E.cy].len) E.cx--;
@@ -5343,7 +5652,8 @@ static void macro_play(int ri, int count) {
                 case MODE_COMMAND:     editor_process_command(c); break;
                 case MODE_SEARCH:      editor_process_search(c);  break;
                 case MODE_VISUAL:
-                case MODE_VISUAL_LINE: editor_process_visual(c);  break;
+                case MODE_VISUAL_LINE:
+                case MODE_VISUAL_BLOCK: editor_process_visual(c);  break;
                 default: break;
             }
         }
@@ -5418,7 +5728,8 @@ void editor_process_keypress(void) {
         case MODE_COMMAND:     editor_process_command(c); break;
         case MODE_SEARCH:      editor_process_search(c);  break;
         case MODE_VISUAL:
-        case MODE_VISUAL_LINE: editor_process_visual(c);  break;
+        case MODE_VISUAL_LINE:
+        case MODE_VISUAL_BLOCK: editor_process_visual(c);  break;
         case MODE_FUZZY:       editor_process_fuzzy(c);   break;
     }
 

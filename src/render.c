@@ -72,13 +72,52 @@ static int gutter_width(void) { return gutter_width_for(&E.buf, E.cur_buftab); }
 
 /* Adjust rowoff/coloff so the cursor stays within the visible viewport.
    Horizontal scroll uses the content width (screen minus gutter). */
+/* Count visible screen rows between file rows `from` and `to` (inclusive of from,
+   exclusive of to).  Closed folds count as 1 visible row. */
+static int visible_rows_between(int from, int to) {
+    int count = 0;
+    int r = from;
+    while (r < to && r < E.buf.numrows) {
+        count++;
+        if (E.buf.folds && r < E.buf.folds_cap && E.buf.folds[r]) {
+            r = buf_fold_end(&E.buf, r, E.opts.tabwidth) + 1;
+        } else {
+            r++;
+        }
+    }
+    return count;
+}
+
+/* Walk `n` visible rows backward from `start`, returning the file row. */
+static int visible_row_back(int start, int n) {
+    int r = start;
+    while (n > 0 && r > 0) {
+        r--;
+        /* If r is inside a fold, jump to the fold header. */
+        if (E.buf.folds) {
+            for (int f = r; f >= 0; f--) {
+                if (f < E.buf.folds_cap && E.buf.folds[f]) {
+                    int end = buf_fold_end(&E.buf, f, E.opts.tabwidth);
+                    if (r <= end) { r = f; break; }
+                    break;
+                }
+            }
+        }
+        n--;
+    }
+    return r;
+}
+
 static void editor_scroll(void) {
     int content_cols = E.screencols - gutter_width();
 
     if (E.cy < E.rowoff)
         E.rowoff = E.cy;
-    if (E.cy >= E.rowoff + E.screenrows)
-        E.rowoff = E.cy - E.screenrows + 1;
+
+    /* Count visible rows from rowoff to cy; if > screenrows, scroll down. */
+    int vis = visible_rows_between(E.rowoff, E.cy);
+    if (vis >= E.screenrows)
+        E.rowoff = visible_row_back(E.cy, E.screenrows - 1);
 
     /* Horizontal scroll uses visual column so tabs scroll correctly. */
     int vcx = 0;
@@ -126,7 +165,8 @@ static const char *hl_to_escape(unsigned char hl) {
 static int visual_col_range_for(int filerow, int vis_anchor_row, int vis_anchor_col,
                                  int cur_row, int cur_col,
                                  EditorMode mode, int *c0, int *c1) {
-    if (mode != MODE_VISUAL && mode != MODE_VISUAL_LINE) return 0;
+    if (mode != MODE_VISUAL && mode != MODE_VISUAL_LINE
+        && mode != MODE_VISUAL_BLOCK) return 0;
 
     int ar = vis_anchor_row, ac = vis_anchor_col;
     int cr = cur_row,        cc = cur_col;
@@ -136,6 +176,14 @@ static int visual_col_range_for(int filerow, int vis_anchor_row, int vis_anchor_
 
     if (mode == MODE_VISUAL_LINE) {
         *c0 = 0; *c1 = INT_MAX;
+        return 1;
+    }
+
+    if (mode == MODE_VISUAL_BLOCK) {
+        /* Block mode: same column range on every row. */
+        int lc = ac < cc ? ac : cc;
+        int rc = ac > cc ? ac : cc;
+        *c0 = lc; *c1 = rc + 1;
         return 1;
     }
 
@@ -412,9 +460,11 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         buf->hl_dirty_from = buf->numrows;
     }
 
+    /* Build filerow mapping: walk forward from pro, skipping folded rows. */
+    int fr = pro;
     char mv[24];
     for (int y = 0; y < p->height; y++) {
-        int filerow = y + pro;
+        int filerow = fr;
 
         /* Move to absolute terminal position. */
         int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;%dH", p->top + y, p->left);
@@ -747,6 +797,26 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             render_row_content(ab, row, pco, content_cols,
                                E.opts.tabwidth, hl_q,
                                bm0, bm1, vis_c0, vis_c1, cur_col, dbg);
+
+            /* Fold indicator: show "[N lines]" after fold header. */
+            if (buf->folds && filerow < buf->folds_cap && buf->folds[filerow]) {
+                int fend = buf_fold_end(buf, filerow, E.opts.tabwidth);
+                int hidden = fend - filerow;
+                if (hidden > 0) {
+                    char finfo[32];
+                    int flen = snprintf(finfo, sizeof(finfo),
+                                        " \x1b[2;36m[%d lines]\x1b[m", hidden);
+                    ab_append(ab, finfo, flen);
+                }
+            }
+        }
+
+        /* Advance fr: if this row is a closed fold, skip its body. */
+        if (filerow < buf->numrows && buf->folds
+            && filerow < buf->folds_cap && buf->folds[filerow]) {
+            fr = buf_fold_end(buf, filerow, E.opts.tabwidth) + 1;
+        } else {
+            fr++;
         }
     }
 }
@@ -1226,6 +1296,10 @@ static void draw_global_command_bar(AppendBuf *ab) {
             ab_append(ab, "-- VISUAL LINE --", 17);
             break;
 
+        case MODE_VISUAL_BLOCK:
+            ab_append(ab, "-- VISUAL BLOCK --", 18);
+            break;
+
         case MODE_COMMAND: {
             char line[258];
             int len = snprintf(line, sizeof(line), ":%s", E.cmdbuf);
@@ -1391,7 +1465,9 @@ void editor_refresh_screen(void) {
     if (is_term_pane)
         ab_append(&ab, "\x1b[6 q", 5);
     else
-        ab_append(&ab, (E.mode == MODE_NORMAL) ? "\x1b[1 q" : "\x1b[6 q", 5);
+        ab_append(&ab, (E.mode == MODE_NORMAL || E.mode == MODE_VISUAL
+                       || E.mode == MODE_VISUAL_LINE || E.mode == MODE_VISUAL_BLOCK)
+                      ? "\x1b[1 q" : "\x1b[6 q", 5);
 
     /* Cursor position. */
     char buf[32];
@@ -1424,8 +1500,9 @@ void editor_refresh_screen(void) {
     } else {
         int vcx = (E.buf.numrows > 0 && E.cy < E.buf.numrows)
                   ? col_to_vcol(&E.buf.rows[E.cy], E.cx, E.opts.tabwidth) : 0;
+        int screen_row = visible_rows_between(E.rowoff, E.cy);
         len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
-                       ap->top  + (E.cy - E.rowoff),
+                       ap->top  + screen_row,
                        ap->left + (vcx - E.coloff) + gutter_width());
     }
     ab_append(&ab, buf, len);
