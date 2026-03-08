@@ -72,6 +72,8 @@ static int l_set_option(lua_State *LS) {
         int h = (int)luaL_checkinteger(LS, 2);
         if (h >= 3 && h <= 50) E.opts.term_height_rows = h;
         else luaL_error(LS, "term_height must be 3-50");
+    } else if (strcmp(name, "autopairs") == 0) {
+        E.opts.autopairs = lua_toboolean(LS, 2);
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }

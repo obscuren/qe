@@ -64,8 +64,9 @@ typedef struct {
     int       sb_offset;       /* how many lines scrolled back (view) */
 } TermState;
 
-/* Create a terminal: fork shell, allocate grid. Returns NULL on failure. */
-TermState *term_emu_open(int rows, int cols);
+/* Create a terminal: fork shell (or `cmd` if non-NULL), allocate grid.
+   Returns NULL on failure. */
+TermState *term_emu_open(int rows, int cols, const char *cmd);
 
 /* Destroy: kill child, free grid. */
 void       term_emu_close(TermState *t);

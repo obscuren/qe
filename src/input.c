@@ -144,6 +144,36 @@ static int is_close_bracket(char c) {
     return c == '}' || c == ')' || c == ']';
 }
 
+/* Auto-pair helpers. */
+static char autopair_close(char c) {
+    switch (c) {
+        case '(': return ')';
+        case '{': return '}';
+        case '[': return ']';
+        case '"': return '"';
+        case '\'': return '\'';
+        default: return 0;
+    }
+}
+
+static int is_autopair_open(char c) {
+    return autopair_close(c) != 0;
+}
+
+/* Return the char at cursor position, or 0 if at/past end of line. */
+static char char_at_cursor(void) {
+    if (E.cy >= E.buf.numrows) return 0;
+    Row *row = &E.buf.rows[E.cy];
+    if (E.cx >= row->len) return 0;
+    return row->chars[E.cx];
+}
+
+/* Return the char before cursor, or 0. */
+static char char_before_cursor(void) {
+    if (E.cy >= E.buf.numrows || E.cx <= 0) return 0;
+    return E.buf.rows[E.cy].chars[E.cx - 1];
+}
+
 static void editor_insert_char(char c) {
     /* If cursor is past the last row (e.g. empty file), add a row first. */
     if (E.cy == E.buf.numrows)
@@ -524,8 +554,20 @@ static void replay_insert_text(const char *text, int len) {
         } else if (c >= 32 && c < 127) {
             if (E.opts.autoindent && is_close_bracket((char)c))
                 editor_close_bracket((char)c);
-            else
+            else if (E.opts.autopairs && is_autopair_open((char)c)) {
+                if ((c == '"' || c == '\'') && char_at_cursor() == (char)c)
+                    E.cx++;
+                else {
+                    editor_insert_char((char)c);
+                    editor_insert_char(autopair_close((char)c));
+                    E.cx--;
+                }
+            } else if (E.opts.autopairs && is_close_bracket((char)c)
+                       && char_at_cursor() == (char)c) {
+                E.cx++;
+            } else {
                 editor_insert_char((char)c);
+            }
         }
     }
 }
@@ -3018,7 +3060,7 @@ static void term_close_buf(int bi) {
     }
 }
 
-static void editor_open_terminal(void) {
+static void editor_open_terminal(const char *cmd) {
     if (E.num_buftabs >= MAX_BUFS) {
         status_err("Too many open buffers (max %d)", MAX_BUFS);
         return;
@@ -3056,10 +3098,16 @@ static void editor_open_terminal(void) {
     E.panes[E.cur_pane].buf_idx = idx;
     editor_buf_restore(idx);
     buf_init(&E.buf);
-    E.buf.filename = strdup("[Terminal]");
+    if (cmd) {
+        char title[128];
+        snprintf(title, sizeof(title), "[Terminal: %s]", cmd);
+        E.buf.filename = strdup(title);
+    } else {
+        E.buf.filename = strdup("[Terminal]");
+    }
 
     Pane *p = &E.panes[E.cur_pane];
-    TermState *ts = term_emu_open(p->height, p->width);
+    TermState *ts = term_emu_open(p->height, p->width, cmd);
     if (!ts) {
         status_err("Failed to open terminal");
         return;
@@ -3506,8 +3554,13 @@ void editor_execute_command(void) {
         goto done;
 
     /* ── :Tree ──────────────────────────────────────────────────────── */
-    } else if (strcmp(cmd, "terminal") == 0 || strcmp(cmd, "term") == 0) {
-        editor_open_terminal();
+    } else if ((strncmp(cmd, "terminal", 8) == 0 &&
+                (cmd[8] == '\0' || cmd[8] == ' ')) ||
+               (strncmp(cmd, "term", 4) == 0 &&
+                (cmd[4] == '\0' || cmd[4] == ' '))) {
+        int kw = (strncmp(cmd, "terminal", 8) == 0 && (cmd[8]=='\0'||cmd[8]==' ')) ? 8 : 4;
+        const char *arg = (cmd[kw] == ' ' && cmd[kw+1]) ? cmd + kw + 1 : NULL;
+        editor_open_terminal(arg);
         goto done;
 
     } else if (strcmp(cmd, "Tree") == 0 || strcmp(cmd, "tree") == 0) {
@@ -4845,9 +4898,21 @@ static void editor_process_insert(int c) {
             editor_insert_newline();
             break;
 
-        case 127:  /* Backspace */
+        case 127: { /* Backspace */
+            /* Auto-pairs: delete both chars when cursor is between a pair. */
+            if (E.opts.autopairs) {
+                char before = char_before_cursor();
+                char after  = char_at_cursor();
+                if (before && autopair_close(before) == after && after != 0) {
+                    /* Delete the closing char first (at cursor), then backspace. */
+                    buf_row_delete_char(&E.buf.rows[E.cy], E.cx);
+                    E.buf.dirty++;
+                    buf_mark_hl_dirty(&E.buf, E.cy);
+                }
+            }
             editor_delete_char();
             break;
+        }
 
         case '\t': {
             /* Insert spaces up to the next tab stop. */
@@ -4861,8 +4926,23 @@ static void editor_process_insert(int c) {
             if (c >= 32 && c < 127) {
                 if (E.opts.autoindent && is_close_bracket((char)c))
                     editor_close_bracket((char)c);
-                else
+                else if (E.opts.autopairs && is_autopair_open((char)c)) {
+                    /* Skip-over: typing a quote that matches char at cursor. */
+                    if ((c == '"' || c == '\'') && char_at_cursor() == c) {
+                        E.cx++;
+                    } else {
+                        /* Insert opening + closing, cursor between. */
+                        editor_insert_char((char)c);
+                        editor_insert_char(autopair_close((char)c));
+                        E.cx--;
+                    }
+                } else if (E.opts.autopairs && is_close_bracket((char)c)
+                           && char_at_cursor() == c) {
+                    /* Skip over matching closing bracket. */
+                    E.cx++;
+                } else {
                     editor_insert_char((char)c);
+                }
             }
             break;
     }

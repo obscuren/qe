@@ -27,6 +27,7 @@ void editor_init(void) {
     E.opts.fuzzy_width_pct = 40;
     E.opts.qf_height_rows  = 8;
     E.opts.term_height_rows = 8;
+    E.opts.autopairs        = 1;
 
     buf_init(&E.buf);
 

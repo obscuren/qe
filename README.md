@@ -132,6 +132,8 @@ Enter insert mode with `i` (before cursor), `a` (after cursor), `o` (new line be
 | `Enter`    | Split line / new line                   |
 | `Esc`      | Return to Normal mode                   |
 
+**Auto-pairs** (enabled by default): typing `(`, `{`, `[`, `"`, or `'` automatically inserts the closing counterpart and places the cursor between them. Typing the closing character when it already matches the character under the cursor skips over it instead of inserting a duplicate. Backspace between a matched pair deletes both characters. Disable with `qe.set_option("autopairs", false)`.
+
 ---
 
 ## Normal mode commands
@@ -352,8 +354,9 @@ The terminal is automatically redrawn on resize (`SIGWINCH`); the layout collaps
 | Command              | Action                                             |
 |----------------------|----------------------------------------------------|
 | `:terminal` / `:term`| Open an embedded terminal in a split below          |
+| `:terminal cmd`      | Run a specific command (e.g. `:terminal make`)      |
 
-Opens your `$SHELL` (or `/bin/sh`) in a horizontal split below the current pane. The terminal defaults to 8 rows; configure via Lua:
+Opens your `$SHELL` (or `/bin/sh`) in a horizontal split below the current pane. When a command is given (e.g. `:term make`), it runs that command via `sh -c` instead. The terminal defaults to 8 rows; configure via Lua:
 
 ```lua
 qe.set_option("term_height", 12)   -- 3-50 rows
@@ -622,10 +625,12 @@ Set editor options.
 | `autoindent`      | boolean | `true`  | Copy indentation on new lines                 |
 | `tabwidth`        | integer | `4`     | Number of spaces inserted by Tab              |
 | `fuzzy_width_pct` | integer | `40`    | Fuzzy finder panel width as % of terminal     |
+| `autopairs`       | boolean | `true`  | Auto-close `()`, `{}`, `[]`, `""`, `''`       |
 
 ```lua
 qe.set_option("tabwidth", 2)
 qe.set_option("line_numbers", false)
+qe.set_option("autopairs", false)   -- disable auto-pairs
 ```
 
 ### `qe.bind_key(mode, key, fn)`

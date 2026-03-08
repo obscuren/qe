@@ -81,6 +81,7 @@ typedef struct {
     int fuzzy_width_pct;  /* fuzzy panel width as % of terminal (default 40) */
     int qf_height_rows;   /* quickfix pane height in rows (default 8)        */
     int term_height_rows; /* terminal pane height in rows (default 8)        */
+    int autopairs;        /* 1 = auto-close (){}[]""'' in insert mode        */
 } EditorOptions;
 
 typedef struct {

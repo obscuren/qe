@@ -415,7 +415,7 @@ static void process_byte(TermState *t, unsigned char ch) {
 
 /* ── Public API ───────────────────────────────────────────────────────── */
 
-TermState *term_emu_open(int rows, int cols) {
+TermState *term_emu_open(int rows, int cols, const char *cmd) {
     TermState *t = calloc(1, sizeof(TermState));
     if (!t) return NULL;
 
@@ -446,11 +446,15 @@ TermState *term_emu_open(int rows, int cols) {
     }
 
     if (pid == 0) {
-        /* Child: exec shell. */
-        const char *shell = getenv("SHELL");
-        if (!shell) shell = "/bin/sh";
+        /* Child: exec shell or command. */
         setenv("TERM", "xterm-256color", 1);
-        execlp(shell, shell, (char *)NULL);
+        if (cmd) {
+            execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        } else {
+            const char *shell = getenv("SHELL");
+            if (!shell) shell = "/bin/sh";
+            execlp(shell, shell, (char *)NULL);
+        }
         _exit(127);
     }
 
