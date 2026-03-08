@@ -403,6 +403,32 @@ static void yank_set_multiline_chars(int sr, int sc, int er, int ec) {
 
 static void editor_close_bracket(char c);  /* forward declaration */
 
+/* ── Macro recording / playback ──────────────────────────────────────── */
+
+static void macro_record_key(int c) {
+    if (E.macro_len >= E.macro_cap) {
+        E.macro_cap = E.macro_cap ? E.macro_cap * 2 : 64;
+        E.macro_buf = realloc(E.macro_buf, sizeof(int) * E.macro_cap);
+    }
+    E.macro_buf[E.macro_len++] = c;
+}
+
+static void macro_stop(void) {
+    int ri = E.recording_reg;
+    E.recording_reg = -1;
+    if (ri < 0 || ri >= MACRO_REGS) return;
+    free(E.macros[ri].keys);
+    E.macros[ri].keys = E.macro_buf;
+    E.macros[ri].len  = E.macro_len;
+    E.macro_buf = NULL;
+    E.macro_len = 0;
+    E.macro_cap = 0;
+    status_msg("Recorded @%c (%d keys)", 'a' + ri, E.macros[ri].len);
+}
+
+/* macro_play() defined just before editor_process_keypress(). */
+static void macro_play(int ri, int count);
+
 /* ── . repeat helpers ────────────────────────────────────────────────── */
 
 static void la_free(void) {
@@ -3474,6 +3500,62 @@ void editor_execute_command(void) {
         else status_err("Already at first quickfix entry");
         goto done;
 
+    /* ── :registers / :reg ─────────────────────────────────────────── */
+    } else if (strcmp(cmd, "registers") == 0 || strcmp(cmd, "reg") == 0) {
+        if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); goto done; }
+        int ridx = E.num_buftabs++;
+        memset(&E.buftabs[ridx], 0, sizeof(BufTab));
+        buf_init(&E.buftabs[ridx].buf);
+        Buffer *rb = &E.buftabs[ridx].buf;
+        const char *hdr = "--- Registers ---";
+        buf_insert_row(rb, 0, hdr, (int)strlen(hdr));
+        int row = 1;
+        for (int ri = 0; ri < REG_COUNT; ri++) {
+            if (!E.regs[ri].rows || E.regs[ri].numrows == 0) continue;
+            char label = (ri == 0) ? '"' : ('a' + ri - 1);
+            /* Build a preview: first row, truncated. */
+            char line[256];
+            const char *preview = E.regs[ri].rows[0];
+            int extra = E.regs[ri].numrows > 1 ? E.regs[ri].numrows - 1 : 0;
+            int llen;
+            if (extra)
+                llen = snprintf(line, sizeof(line), " \"%c   %s (+%d lines)",
+                                label, preview, extra);
+            else
+                llen = snprintf(line, sizeof(line), " \"%c   %s", label, preview);
+            buf_insert_row(rb, row++, line, llen);
+        }
+        /* Show macro registers with content. */
+        int has_macros = 0;
+        for (int mi = 0; mi < MACRO_REGS; mi++) {
+            if (!E.macros[mi].keys || E.macros[mi].len == 0) continue;
+            if (!has_macros) {
+                const char *mhdr = "--- Macros ---";
+                buf_insert_row(rb, row++, mhdr, (int)strlen(mhdr));
+                has_macros = 1;
+            }
+            char line[256];
+            int llen = snprintf(line, sizeof(line), " @%c   %d keys",
+                                'a' + mi, E.macros[mi].len);
+            buf_insert_row(rb, row++, line, llen);
+        }
+        if (row == 1) {
+            const char *empty = " (all registers empty)";
+            buf_insert_row(rb, 1, empty, (int)strlen(empty));
+        }
+        rb->dirty = 0;
+        rb->filename = strdup("[Registers]");
+        pane_save_cursor();
+        editor_buf_save(E.cur_buftab);
+        E.panes[E.cur_pane].buf_idx = ridx;
+        E.cur_buftab = ridx;
+        editor_buf_restore(ridx);
+        E.syntax = NULL;
+        E.mode = MODE_NORMAL;
+        E.cy = 0; E.cx = 0;
+        E.rowoff = 0; E.coloff = 0;
+        goto done;
+
     /* ── :close ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "close") == 0) {
         pane_close(E.cur_pane);
@@ -4280,6 +4362,33 @@ static void editor_process_normal(int c) {
             break;
         }
 
+        /* --- q: start macro recording --- */
+        case 'q': {
+            int r = editor_read_key();
+            if (r >= 'a' && r <= 'z') {
+                E.recording_reg = r - 'a';
+                E.macro_len = 0;
+                status_msg("Recording @%c...", r);
+            }
+            break;
+        }
+
+        /* --- @: replay macro --- */
+        case '@': {
+            int r = editor_read_key();
+            int ri;
+            if (r == '@') {
+                ri = E.last_macro_reg;
+                if (ri < 0) { status_err("No previous macro"); break; }
+            } else if (r >= 'a' && r <= 'z') {
+                ri = r - 'a';
+            } else {
+                break;
+            }
+            macro_play(ri, n);
+            break;
+        }
+
         /* --- f/F/t/T: find char on line; ;/, repeat --- */
         case 'f': case 'F': case 't': case 'T': {
             int tk = editor_read_key();
@@ -4872,6 +4981,39 @@ static void editor_process_fuzzy(int c) {
     }
 }
 
+static void macro_record_key(int c);
+static void macro_stop(void);
+
+static void macro_play(int ri, int count) {
+    if (ri < 0 || ri >= MACRO_REGS) return;
+    if (!E.macros[ri].keys || E.macros[ri].len == 0) {
+        status_err("Register %c is empty", 'a' + ri);
+        return;
+    }
+    E.last_macro_reg = ri;
+    E.macro_playing++;
+    for (int rep = 0; rep < count; rep++) {
+        for (int i = 0; i < E.macros[ri].len; i++) {
+            int c = E.macros[ri].keys[i];
+
+            if (E.recording_reg >= 0)
+                macro_record_key(c);
+
+            s_vertical_move = 0;
+            switch (E.mode) {
+                case MODE_NORMAL:      editor_process_normal(c);  break;
+                case MODE_INSERT:      editor_process_insert(c);  break;
+                case MODE_COMMAND:     editor_process_command(c); break;
+                case MODE_SEARCH:      editor_process_search(c);  break;
+                case MODE_VISUAL:
+                case MODE_VISUAL_LINE: editor_process_visual(c);  break;
+                default: break;
+            }
+        }
+    }
+    E.macro_playing--;
+}
+
 void editor_process_keypress(void) {
     int c = editor_read_key();
 
@@ -4885,6 +5027,16 @@ void editor_process_keypress(void) {
     }
     if (c == MOUSE_SCROLL_UP)   { handle_mouse_scroll(-1); return; }
     if (c == MOUSE_SCROLL_DOWN) { handle_mouse_scroll(+1); return; }
+
+    /* Macro: stop recording on q in normal mode. */
+    if (E.recording_reg >= 0 && c == 'q' && E.mode == MODE_NORMAL) {
+        macro_stop();
+        return;
+    }
+
+    /* Macro: record key (but not while replaying). */
+    if (E.recording_reg >= 0 && !E.macro_playing)
+        macro_record_key(c);
 
     s_vertical_move = 0;
 

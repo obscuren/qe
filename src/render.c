@@ -1173,6 +1173,24 @@ static void draw_global_command_bar(AppendBuf *ab) {
             }
             break;
     }
+
+    /* Show recording indicator on the right side of the command bar. */
+    if (E.recording_reg >= 0) {
+        char rec[20];
+        int rlen = snprintf(rec, sizeof(rec), "recording @%c",
+                            'a' + E.recording_reg);
+        /* Position at the right edge. */
+        int col = E.term_cols - rlen;
+        if (col > 1) {
+            char pos[16];
+            int plen = snprintf(pos, sizeof(pos), "\x1b[%d;%dH",
+                                E.term_rows, col);
+            ab_append(ab, pos, plen);
+            ab_append(ab, "\x1b[31m", 5);  /* red */
+            ab_append(ab, rec, rlen);
+            ab_append(ab, "\x1b[m", 3);
+        }
+    }
 }
 
 /* ── Main refresh ────────────────────────────────────────────────────── */

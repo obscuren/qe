@@ -156,6 +156,19 @@ typedef struct {
     } regs[REG_COUNT];
     int    pending_reg;    /* -1 = none; 0 = unnamed; 1-26 = a-z           */
 
+    /* Macro recording / playback */
+    #define MACRO_REGS 26
+    struct {
+        int *keys;
+        int  len;
+    } macros[MACRO_REGS];         /* a-z: index 0-25                       */
+    int    recording_reg;  /* -1 = not recording; 0-25 = recording into a-z */
+    int   *macro_buf;      /* key buffer during recording                   */
+    int    macro_len;
+    int    macro_cap;
+    int    last_macro_reg; /* register used by last @x (for @@); -1=none   */
+    int    macro_playing;  /* >0 = currently replaying a macro             */
+
     /* Tab completion (command mode :e) */
     char **completion_matches;
     int    completion_count;

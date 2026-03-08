@@ -77,7 +77,14 @@ void editor_init(void) {
     E.is_replaying         = 0;
 
     memset(E.regs, 0, sizeof(E.regs));
-    E.pending_reg = -1;
+    E.pending_reg    = -1;
+    memset(E.macros, 0, sizeof(E.macros));
+    E.recording_reg  = -1;
+    E.macro_buf      = NULL;
+    E.macro_len      = 0;
+    E.macro_cap      = 0;
+    E.last_macro_reg = -1;
+    E.macro_playing  = 0;
 
     E.completion_matches = NULL;
     E.completion_count   = 0;

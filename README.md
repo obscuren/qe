@@ -192,6 +192,22 @@ Prefix any yank, delete, or paste with `"a` through `"z` to use a named register
 
 All yank/delete operations also write to the unnamed register, so `p` always pastes the most recently yanked/deleted text regardless of which named register was used. The active register is shown in the status bar.
 
+Use `:registers` (or `:reg`) to view all register and macro contents in a scratch buffer.
+
+### Macros
+
+Record and replay keystroke sequences:
+
+| Key      | Action                                    |
+|----------|-------------------------------------------|
+| `qa`     | Start recording into register `a`         |
+| `q`      | Stop recording                            |
+| `@a`     | Replay macro in register `a`              |
+| `@@`     | Replay the last used macro                |
+| `5@a`    | Replay macro `a` five times               |
+
+While recording, a red `recording @a` indicator appears in the command bar. Macros capture all keystrokes across all modes (normal, insert, command, search, visual).
+
 `c` operations are a single undo step — pressing `u` restores the text before the change.
 
 ## Text objects
