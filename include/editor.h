@@ -6,6 +6,7 @@
 #include "fuzzy.h"
 #include "git.h"
 #include "qf.h"
+#include "term_emu.h"
 #include "undo.h"
 #include "search.h"
 #include "syntax.h"
@@ -50,7 +51,16 @@ typedef struct {
     int        is_log;    /* 1 = this slot holds the git log buffer          */
     GitLogEntry *log_entries; /* non-NULL when is_log == 1                   */
     int         log_count;
+    int        is_term;   /* 1 = this slot holds an embedded terminal       */
+    TermState *term;      /* non-NULL when is_term == 1                     */
 } BufTab;
+
+/* True for any non-content buffer (tree, quickfix, git viewers, terminal…).
+   Use this to skip special buffers in :ls, :bn/:bp, fuzzy picker, dirty checks, etc. */
+static inline int buftab_is_special(const BufTab *bt) {
+    return bt->is_tree || bt->is_qf || bt->is_blame || bt->is_diff
+        || bt->is_commit || bt->is_show || bt->is_log || bt->is_term;
+}
 
 typedef enum {
     MODE_NORMAL,
@@ -70,6 +80,7 @@ typedef struct {
     int tabwidth;       /* spaces inserted by Tab key (default 4) */
     int fuzzy_width_pct;  /* fuzzy panel width as % of terminal (default 40) */
     int qf_height_rows;   /* quickfix pane height in rows (default 8)        */
+    int term_height_rows; /* terminal pane height in rows (default 8)        */
 } EditorOptions;
 
 typedef struct {

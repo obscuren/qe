@@ -4,8 +4,10 @@
 #include "input.h"
 #include "render.h"
 #include "lua_bridge.h"
+#include "term_emu.h"
 #include "cli.h"
 
+#include <poll.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -76,8 +78,47 @@ int main(int argc, char *argv[]) {
                 E.screencols      = nc;
             }
         }
+
+        /* Resize + drain PTY output from all terminal panes. */
+        for (int i = 0; i < E.num_buftabs; i++) {
+            if (E.buftabs[i].is_term && E.buftabs[i].term) {
+                TermState *ts = E.buftabs[i].term;
+                for (int pi = 0; pi < E.num_panes; pi++) {
+                    if (E.panes[pi].buf_idx == i) {
+                        Pane *p = &E.panes[pi];
+                        if (ts->rows != p->height || ts->cols != p->width)
+                            term_emu_resize(ts, p->height, p->width);
+                        break;
+                    }
+                }
+                term_emu_read(ts);
+            }
+        }
+
+        /* Auto-close terminal panes whose shell has exited. */
+        editor_reap_terminals();
+
         editor_refresh_screen();
-        editor_process_keypress();
+
+        /* Build poll set: stdin + all terminal PTY fds. */
+        struct pollfd pfds[1 + MAX_BUFS];
+        int nfds = 0;
+        pfds[nfds++] = (struct pollfd){ .fd = STDIN_FILENO, .events = POLLIN };
+        for (int i = 0; i < E.num_buftabs; i++) {
+            if (E.buftabs[i].is_term && E.buftabs[i].term
+                && E.buftabs[i].term->pty_fd >= 0)
+                pfds[nfds++] = (struct pollfd){
+                    .fd = E.buftabs[i].term->pty_fd, .events = POLLIN };
+        }
+
+        /* Wait for stdin OR any PTY output (or signal). */
+        int pr = poll(pfds, nfds, -1);
+        if (pr <= 0) continue;  /* signal interrupted or error — just re-loop */
+
+        /* If stdin has data, process one keypress. */
+        if (pfds[0].revents & POLLIN)
+            editor_process_keypress();
+        /* PTY data (if any) will be drained at the top of the next iteration. */
     }
 
     return 0;

@@ -6,6 +6,7 @@
 #include "qf.h"
 #include "lua_bridge.h"
 #include "search.h"
+#include "term_emu.h"
 #include "tree.h"
 #include "utils.h"
 
@@ -1367,8 +1368,8 @@ static void pane_save_cursor(void) {
 
 static void pane_activate(int idx) {
     pane_save_cursor();
-    /* Track the last content (non-tree) pane we're leaving. */
-    if (!E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree)
+    /* Track the last content pane we're leaving. */
+    if (!buftab_is_special(&E.buftabs[E.panes[E.cur_pane].buf_idx]))
         E.last_content_pane = E.cur_pane;
     int old_buf = E.panes[E.cur_pane].buf_idx;
     int new_buf = E.panes[idx].buf_idx;
@@ -1381,7 +1382,7 @@ static void pane_activate(int idx) {
     E.rowoff = p->rowoff; E.coloff = p->coloff;
     E.cur_buftab = new_buf;
     if (old_buf != new_buf) editor_buf_restore(new_buf);
-    E.mode = MODE_NORMAL;
+    E.mode = E.buftabs[new_buf].is_term ? MODE_INSERT : MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
@@ -1423,7 +1424,7 @@ static void pane_close(int idx) {
     pane_save_cursor();
 
     /* Track last content pane when leaving one. */
-    if (!E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree)
+    if (!buftab_is_special(&E.buftabs[E.panes[E.cur_pane].buf_idx]))
         E.last_content_pane = E.cur_pane;
 
     Pane *p = &E.panes[idx];
@@ -1471,7 +1472,7 @@ static void pane_close(int idx) {
     E.screencols = dp->width;
     E.cx = dp->cx; E.cy = dp->cy;
     E.rowoff = dp->rowoff; E.coloff = dp->coloff;
-    E.mode = MODE_NORMAL;
+    E.mode = E.buftabs[donor_buf].is_term ? MODE_INSERT : MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
@@ -1517,10 +1518,10 @@ static void tree_activate_entry(void) {
     } else {
         /* Find a content pane to open the file in. */
         int cpane = E.last_content_pane;
-        if (cpane >= E.num_panes || E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+        if (cpane >= E.num_panes || buftab_is_special(&E.buftabs[E.panes[cpane].buf_idx])) {
             cpane = -1;
             for (int i = 0; i < E.num_panes; i++) {
-                if (!E.buftabs[E.panes[i].buf_idx].is_tree) { cpane = i; break; }
+                if (!buftab_is_special(&E.buftabs[E.panes[i].buf_idx])) { cpane = i; break; }
             }
         }
         if (cpane < 0) { status_err("No content pane"); return; }
@@ -1646,10 +1647,10 @@ static void editor_open_tree_pane(void) {
         /* Find the content pane to activate after removal. */
         int cpane = E.last_content_pane;
         if (cpane >= E.num_panes || cpane == tree_pane ||
-            E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+            buftab_is_special(&E.buftabs[E.panes[cpane].buf_idx])) {
             cpane = -1;
             for (int i = 0; i < E.num_panes; i++) {
-                if (i != tree_pane && !E.buftabs[E.panes[i].buf_idx].is_tree)
+                if (i != tree_pane && !buftab_is_special(&E.buftabs[E.panes[i].buf_idx]))
                     { cpane = i; break; }
             }
         }
@@ -2643,12 +2644,10 @@ static void qf_jump(int idx) {
     /* Find a content pane to display in. */
     int cpane = E.last_content_pane;
     if (cpane < 0 || cpane >= E.num_panes ||
-        E.buftabs[E.panes[cpane].buf_idx].is_qf ||
-        E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+        buftab_is_special(&E.buftabs[E.panes[cpane].buf_idx])) {
         cpane = -1;
         for (int i = 0; i < E.num_panes; i++) {
-            if (!E.buftabs[E.panes[i].buf_idx].is_qf &&
-                !E.buftabs[E.panes[i].buf_idx].is_tree)
+            if (!buftab_is_special(&E.buftabs[E.panes[i].buf_idx]))
                 { cpane = i; break; }
         }
     }
@@ -2690,12 +2689,10 @@ static void qf_close_pane(void) {
     /* Find the content pane to switch to after removal. */
     int cpane = E.last_content_pane;
     if (cpane < 0 || cpane >= E.num_panes || cpane == qpi ||
-        E.buftabs[E.panes[cpane].buf_idx].is_qf ||
-        E.buftabs[E.panes[cpane].buf_idx].is_tree) {
+        buftab_is_special(&E.buftabs[E.panes[cpane].buf_idx])) {
         cpane = -1;
         for (int i = 0; i < E.num_panes; i++) {
-            if (i != qpi && !E.buftabs[E.panes[i].buf_idx].is_qf &&
-                !E.buftabs[E.panes[i].buf_idx].is_tree) {
+            if (i != qpi && !buftab_is_special(&E.buftabs[E.panes[i].buf_idx])) {
                 cpane = i; break;
             }
         }
@@ -2778,8 +2775,7 @@ static void qf_open_pane(QfList *ql) {
     }
 
     /* Remember which pane is the current content pane. */
-    if (!E.buftabs[E.panes[E.cur_pane].buf_idx].is_qf &&
-        !E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree)
+    if (!buftab_is_special(&E.buftabs[E.panes[E.cur_pane].buf_idx]))
         E.last_content_pane = E.cur_pane;
 
     /* Allocate buftab for qf buffer. */
@@ -2955,7 +2951,7 @@ static int open_new_buf(const char *filename) {
     if (filename) {
         const char *fn = norm_path(filename);
         for (int i = 0; i < E.num_buftabs; i++) {
-            if (E.buftabs[i].is_tree) continue;
+            if (buftab_is_special(&E.buftabs[i])) continue;
             Buffer *b = (i == E.cur_buftab) ? &E.buf : &E.buftabs[i].buf;
             if (!b->filename) continue;
             if (strcmp(norm_path(b->filename), fn) == 0) {
@@ -2987,24 +2983,115 @@ static int open_new_buf(const char *filename) {
     return 1;
 }
 
+/* Open an embedded terminal in a horizontal split below the current pane. */
+/* Close terminal buffer at buftab index `bi` and its pane (if multi-pane).
+   If it's the last pane, quits the editor. */
+static void term_close_buf(int bi) {
+    term_emu_close(E.buftabs[bi].term);
+    E.buftabs[bi].term = NULL;
+    E.buftabs[bi].is_term = 0;
+
+    /* Find the pane showing this buffer. */
+    int pane_idx = -1;
+    for (int pi = 0; pi < E.num_panes; pi++)
+        if (E.panes[pi].buf_idx == bi) { pane_idx = pi; break; }
+
+    if (E.num_panes > 1 && pane_idx >= 0) {
+        /* If the terminal isn't the active pane, make it active first
+           so pane_close operates on it. */
+        if (pane_idx != E.cur_pane)
+            pane_activate(pane_idx);
+        int closing_buf = E.cur_buftab;
+        pane_close(E.cur_pane);
+        /* Remove the terminal buffer slot. */
+        buf_free(&E.buftabs[closing_buf].buf);
+        for (int si = closing_buf; si < E.num_buftabs - 1; si++)
+            E.buftabs[si] = E.buftabs[si + 1];
+        memset(&E.buftabs[E.num_buftabs - 1], 0, sizeof(BufTab));
+        E.num_buftabs--;
+        for (int pi = 0; pi < E.num_panes; pi++)
+            if (E.panes[pi].buf_idx > closing_buf)
+                E.panes[pi].buf_idx--;
+        if (E.cur_buftab > closing_buf) E.cur_buftab--;
+    } else {
+        editor_quit();
+    }
+}
+
+static void editor_open_terminal(void) {
+    if (E.num_buftabs >= MAX_BUFS) {
+        status_err("Too many open buffers (max %d)", MAX_BUFS);
+        return;
+    }
+
+    /* Split current pane: top keeps content, bottom gets terminal. */
+    pane_save_cursor();
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    Pane *sp = &E.panes[E.cur_pane];
+    int H = sp->height;
+    int th = E.opts.term_height_rows;
+    if (th > H - 2) th = H - 2;   /* leave at least 1 row + status bar for top */
+    if (th < 1) { status_err("Pane too small for terminal"); return; }
+    int h_top = H - 1 - th;       /* -1 for top pane's status bar */
+
+    /* Insert new pane slot after current. */
+    for (int i = E.num_panes; i > E.cur_pane + 1; i--)
+        E.panes[i] = E.panes[i - 1];
+    E.num_panes++;
+    sp->height = h_top;
+    Pane *np   = &E.panes[E.cur_pane + 1];
+    *np        = *sp;
+    np->top    = sp->top + h_top + 1;
+    np->height = th;
+
+    /* Allocate new buffer slot. */
+    int idx = E.num_buftabs++;
+    memset(&E.buftabs[idx], 0, sizeof(BufTab));
+
+    /* Activate the new bottom pane and assign the terminal buffer. */
+    int new_pane = E.cur_pane + 1;
+    pane_activate(new_pane);
+    editor_buf_save(E.cur_buftab);
+    E.cur_buftab = idx;
+    E.panes[E.cur_pane].buf_idx = idx;
+    editor_buf_restore(idx);
+    buf_init(&E.buf);
+    E.buf.filename = strdup("[Terminal]");
+
+    Pane *p = &E.panes[E.cur_pane];
+    TermState *ts = term_emu_open(p->height, p->width);
+    if (!ts) {
+        status_err("Failed to open terminal");
+        return;
+    }
+    E.buftabs[idx].is_term = 1;
+    E.buftabs[idx].term = ts;
+    E.mode = MODE_INSERT;  /* start in terminal-insert (keys go to PTY) */
+}
+
 /* Close the current buffer.  force=0 guards against unsaved changes.
    Returns 1 if the editor should quit (last buffer was closed). */
 static int close_cur_buf(int force) {
-    if (!force && E.buf.dirty) {
+    if (!force && E.buf.dirty && !buftab_is_special(&E.buftabs[E.cur_buftab])) {
         status_err("Unsaved changes (use :q! to override)");
         return 0;
     }
 
-    /* Count non-tree content buffers that would remain after this close. */
+    /* Count content buffers that would remain after this close. */
     int remaining = 0;
     for (int i = 0; i < E.num_buftabs; i++) {
-        if (i != E.cur_buftab && !E.buftabs[i].is_tree)
+        if (i != E.cur_buftab && !buftab_is_special(&E.buftabs[i]))
             remaining++;
     }
     if (remaining == 0)
         return 1;   /* last content buffer — tell caller to quit */
 
     /* Free current live resources. */
+    if (E.buftabs[E.cur_buftab].is_term) {
+        term_emu_close(E.buftabs[E.cur_buftab].term);
+        E.buftabs[E.cur_buftab].term = NULL;
+        E.buftabs[E.cur_buftab].is_term = 0;
+    }
     buf_free(&E.buf);
     undo_stack_clear(&E.undo_stack);
     undo_stack_clear(&E.redo_stack);
@@ -3033,12 +3120,12 @@ static int close_cur_buf(int force) {
             E.panes[i].buf_idx = -1;   /* will be fixed to next below */
     }
 
-    /* Pick next non-tree buffer (prefer forward, then backward). */
+    /* Pick next content buffer (prefer forward, then backward). */
     int next = -1;
     for (int i = cur; i < E.num_buftabs && next < 0; i++)
-        if (!E.buftabs[i].is_tree) next = i;
+        if (!buftab_is_special(&E.buftabs[i])) next = i;
     for (int i = cur - 1; i >= 0 && next < 0; i--)
-        if (!E.buftabs[i].is_tree) next = i;
+        if (!buftab_is_special(&E.buftabs[i])) next = i;
     if (next < 0) next = (cur < E.num_buftabs) ? cur : E.num_buftabs - 1;
 
     /* Redirect any panes that were showing the closed buffer. */
@@ -3213,7 +3300,7 @@ void editor_execute_command(void) {
                         /* Tree is the last pane — quit the editor. */
                         if (!df) {
                             for (int i = 0; i < E.num_buftabs; i++) {
-                                if (E.buftabs[i].is_tree) continue;
+                                if (buftab_is_special(&E.buftabs[i])) continue;
                                 Buffer *b = (i == E.cur_buftab)
                                             ? &E.buf : &E.buftabs[i].buf;
                                 if (b->dirty) {
@@ -3325,7 +3412,7 @@ void editor_execute_command(void) {
                     if (!df) {
                         char dirty_list[96] = "";
                         int  dirty_count = 0, pos = 0;
-                        if (E.buf.dirty && !E.buftabs[E.cur_buftab].is_tree) {
+                        if (E.buf.dirty && !buftab_is_special(&E.buftabs[E.cur_buftab])) {
                             const char *fn = E.buf.filename
                                              ? E.buf.filename : "[No Name]";
                             const char *b = strrchr(fn, '/');
@@ -3335,7 +3422,7 @@ void editor_execute_command(void) {
                             dirty_count++;
                         }
                         for (int i = 0; i < E.num_buftabs; i++) {
-                            if (i == E.cur_buftab || E.buftabs[i].is_tree) continue;
+                            if (i == E.cur_buftab || buftab_is_special(&E.buftabs[i])) continue;
                             if (E.buftabs[i].buf.dirty) {
                                 const char *fn = E.buftabs[i].buf.filename
                                                  ? E.buftabs[i].buf.filename
@@ -3358,6 +3445,8 @@ void editor_execute_command(void) {
                         }
                     }
                     editor_quit();
+                } else if (E.buftabs[E.cur_buftab].is_term) {
+                    term_close_buf(E.cur_buftab);
                 } else if (E.num_panes > 1) {
                     /* Multiple panes: close this pane; buffer stays in list. */
                     pane_close(E.cur_pane);
@@ -3417,6 +3506,10 @@ void editor_execute_command(void) {
         goto done;
 
     /* ── :Tree ──────────────────────────────────────────────────────── */
+    } else if (strcmp(cmd, "terminal") == 0 || strcmp(cmd, "term") == 0) {
+        editor_open_terminal();
+        goto done;
+
     } else if (strcmp(cmd, "Tree") == 0 || strcmp(cmd, "tree") == 0) {
         editor_open_tree_pane();
         goto done;
@@ -3701,7 +3794,7 @@ void editor_execute_command(void) {
         int next = -1;
         for (int i = 1; i <= E.num_buftabs && next < 0; i++) {
             int idx = (E.cur_buftab + i) % E.num_buftabs;
-            if (!E.buftabs[idx].is_tree) next = idx;
+            if (!buftab_is_special(&E.buftabs[idx])) next = idx;
         }
         if (next < 0) status_err("No other buffer");
         else { switch_to_buf(next); status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs); }
@@ -3710,7 +3803,7 @@ void editor_execute_command(void) {
         int next = -1;
         for (int i = 1; i <= E.num_buftabs && next < 0; i++) {
             int idx = (E.cur_buftab - i + E.num_buftabs) % E.num_buftabs;
-            if (!E.buftabs[idx].is_tree) next = idx;
+            if (!buftab_is_special(&E.buftabs[idx])) next = idx;
         }
         if (next < 0) status_err("No other buffer");
         else { switch_to_buf(next); status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs); }
@@ -3719,7 +3812,7 @@ void editor_execute_command(void) {
         int n = atoi(cmd + 2) - 1;
         if (n < 0 || n >= E.num_buftabs)
             status_err("No buffer %d", n + 1);
-        else if (E.buftabs[n].is_tree)
+        else if (buftab_is_special(&E.buftabs[n]))
             status_err("Not a content buffer");
         else {
             switch_to_buf(n);
@@ -3736,7 +3829,7 @@ void editor_execute_command(void) {
         char msg[128];
         int pos = 0;
         for (int i = 0; i < E.num_buftabs && pos < (int)sizeof(msg) - 1; i++) {
-            if (E.buftabs[i].is_tree) continue;   /* tree buffers not listed */
+            if (buftab_is_special(&E.buftabs[i])) continue;
             const char *fn = (i == E.cur_buftab)
                 ? (E.buf.filename          ? E.buf.filename          : "[No Name]")
                 : (E.buftabs[i].buf.filename ? E.buftabs[i].buf.filename : "[No Name]");
@@ -4023,6 +4116,39 @@ static void editor_process_normal(int c) {
                     }
                 }
             }
+        }
+        return;
+    }
+
+    /* Terminal pane (normal mode): limited commands, i/a resume terminal. */
+    if (E.buftabs[E.cur_buftab].is_term) {
+        switch (c) {
+            case 'i': case 'a': case 'A':
+                E.mode = MODE_INSERT;
+                break;
+            case ':':
+                E.mode = MODE_COMMAND;
+                E.cmdbuf[0] = '\0'; E.cmdlen = 0;
+                break;
+            case 0x17: /* Ctrl-W */
+                E.pending_ctrlw = 1;
+                break;
+            case 'p': {
+                /* Paste from register into terminal. */
+                int ri = (E.pending_reg >= 0) ? E.pending_reg : 0;
+                E.pending_reg = -1;
+                if (E.regs[ri].numrows > 0 && E.buftabs[E.cur_buftab].term) {
+                    TermState *ts = E.buftabs[E.cur_buftab].term;
+                    for (int r = 0; r < E.regs[ri].numrows; r++) {
+                        if (r > 0) term_emu_write(ts, "\n", 1);
+                        term_emu_write(ts, E.regs[ri].rows[r],
+                                       (int)strlen(E.regs[ri].rows[r]));
+                    }
+                }
+                break;
+            }
+            default:
+                break;
         }
         return;
     }
@@ -5159,6 +5285,41 @@ void editor_process_keypress(void) {
     if (c == MOUSE_SCROLL_UP)   { handle_mouse_scroll(-1); return; }
     if (c == MOUSE_SCROLL_DOWN) { handle_mouse_scroll(+1); return; }
 
+    /* Terminal pane in INSERT mode: forward keys to PTY.
+       Ctrl-\ (0x1c) escapes back to normal mode for pane nav / commands. */
+    if (E.buftabs[E.panes[E.cur_pane].buf_idx].is_term
+        && E.mode == MODE_INSERT) {
+        TermState *ts = E.buftabs[E.panes[E.cur_pane].buf_idx].term;
+        if (c == 0x1c || c == '\x1b') {
+            /* Ctrl-\ or Escape: return to normal mode (terminal-normal). */
+            E.mode = MODE_NORMAL;
+            return;
+        }
+        if (ts && !ts->exited) {
+            /* Translate editor key codes to terminal escape sequences. */
+            const char *seq = NULL;
+            switch (c) {
+                case ARROW_UP:    seq = "\x1b[A"; break;
+                case ARROW_DOWN:  seq = "\x1b[B"; break;
+                case ARROW_RIGHT: seq = "\x1b[C"; break;
+                case ARROW_LEFT:  seq = "\x1b[D"; break;
+                case HOME_KEY:    seq = "\x1b[H"; break;
+                case END_KEY:     seq = "\x1b[F"; break;
+                case PAGE_UP:     seq = "\x1b[5~"; break;
+                case PAGE_DOWN:   seq = "\x1b[6~"; break;
+                case DEL_KEY:     seq = "\x1b[3~"; break;
+                default:
+                    if (c >= 0 && c < 256) {
+                        char ch = (char)c;
+                        term_emu_write(ts, &ch, 1);
+                    }
+                    break;
+            }
+            if (seq) term_emu_write(ts, seq, (int)strlen(seq));
+        }
+        return;
+    }
+
     /* Macro: stop recording on q in normal mode. */
     if (E.recording_reg >= 0 && c == 'q' && E.mode == MODE_NORMAL) {
         macro_stop();
@@ -5188,5 +5349,15 @@ void editor_process_keypress(void) {
         E.preferred_col = (E.buf.numrows > 0 && E.cy < E.buf.numrows)
             ? col_to_vcol(&E.buf.rows[E.cy], E.cx, E.opts.tabwidth)
             : E.cx;
+    }
+}
+
+void editor_reap_terminals(void) {
+    for (int i = 0; i < E.num_buftabs; i++) {
+        if (E.buftabs[i].is_term && E.buftabs[i].term
+            && E.buftabs[i].term->exited) {
+            term_close_buf(i);
+            return;  /* indices shifted — restart on next call */
+        }
     }
 }

@@ -6,6 +6,7 @@
 #include "qf.h"
 #include "search.h"
 #include "syntax.h"
+#include "term_emu.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -332,6 +333,55 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                            const SearchQuery *hl_q,
                            int vis_ar, int vis_ac,
                            int bm_valid, int bm_row, int bm_col) {
+    /* Terminal pane: render directly from cell grid. */
+    if (E.buftabs[p->buf_idx].is_term) {
+        TermState *ts = E.buftabs[p->buf_idx].term;
+        if (!ts) return;
+        char mv[24];
+        for (int y = 0; y < p->height; y++) {
+            int mvlen = snprintf(mv, sizeof(mv), "\x1b[%d;%dH", p->top + y, p->left);
+            ab_append(ab, mv, mvlen);
+            char erase[16];
+            int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+            ab_append(ab, erase, elen);
+
+            uint8_t prev_fg = 0, prev_bg = 0;
+            uint8_t prev_bold = 0, prev_dim = 0, prev_ul = 0, prev_rev = 0;
+            int attr_set = 0;
+
+            int cols = (p->width < ts->cols) ? p->width : ts->cols;
+            for (int x = 0; x < cols; x++) {
+                TermCell tc = term_emu_cell(ts, y, x);
+                /* Emit SGR only when attributes change. */
+                if (!attr_set || tc.fg != prev_fg || tc.bg != prev_bg ||
+                    tc.bold != prev_bold || tc.dim != prev_dim ||
+                    tc.underline != prev_ul || tc.reverse != prev_rev) {
+                    char sgr[64];
+                    int slen = 0;
+                    slen += snprintf(sgr + slen, sizeof(sgr) - slen, "\x1b[0");
+                    if (tc.bold) slen += snprintf(sgr + slen, sizeof(sgr) - slen, ";1");
+                    if (tc.dim)  slen += snprintf(sgr + slen, sizeof(sgr) - slen, ";2");
+                    if (tc.underline) slen += snprintf(sgr + slen, sizeof(sgr) - slen, ";4");
+                    if (tc.reverse)   slen += snprintf(sgr + slen, sizeof(sgr) - slen, ";7");
+                    if (tc.fg > 0) slen += snprintf(sgr + slen, sizeof(sgr) - slen,
+                                                     ";38;5;%d", tc.fg - 1);
+                    if (tc.bg > 0) slen += snprintf(sgr + slen, sizeof(sgr) - slen,
+                                                     ";48;5;%d", tc.bg - 1);
+                    slen += snprintf(sgr + slen, sizeof(sgr) - slen, "m");
+                    ab_append(ab, sgr, slen);
+                    prev_fg = tc.fg; prev_bg = tc.bg;
+                    prev_bold = tc.bold; prev_dim = tc.dim;
+                    prev_ul = tc.underline; prev_rev = tc.reverse;
+                    attr_set = 1;
+                }
+                char ch = tc.ch ? tc.ch : ' ';
+                ab_append(ab, &ch, 1);
+            }
+            ab_append(ab, "\x1b[m", 3);
+        }
+        return;
+    }
+
     int is_tree      = E.buftabs[p->buf_idx].is_tree;
     int is_qf        = E.buftabs[p->buf_idx].is_qf;
     int is_blame     = E.buftabs[p->buf_idx].is_blame;
@@ -727,6 +777,28 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
             ab_append(ab, " ", 1);
             col += len + 1;
         }
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Terminal pane: compact status. */
+    if (E.buftabs[p->buf_idx].is_term) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        TermState *ts = E.buftabs[p->buf_idx].term;
+        char left[128], right[32];
+        const char *state = (ts && ts->exited) ? "finished" : "running";
+        int llen = snprintf(left, sizeof(left), " [Terminal] %s", state);
+        int rlen = 0;
+        if (ts && ts->exited)
+            rlen = snprintf(right, sizeof(right), "exit %d", ts->exit_status);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (rlen > 0 && llen + rlen <= p->width) ab_append(ab, right, rlen);
         ab_append(ab, "\x1b[m", 3);
         return;
     }
@@ -1140,7 +1212,10 @@ static void draw_global_command_bar(AppendBuf *ab) {
 
     switch (E.mode) {
         case MODE_INSERT:
-            ab_append(ab, "-- INSERT --", 12);
+            if (E.buftabs[E.panes[E.cur_pane].buf_idx].is_term)
+                ab_append(ab, "-- TERMINAL --", 14);
+            else
+                ab_append(ab, "-- INSERT --", 12);
             break;
 
         case MODE_VISUAL:
@@ -1311,14 +1386,22 @@ void editor_refresh_screen(void) {
     /* Fuzzy overlay drawn on top of everything else. */
     if (E.mode == MODE_FUZZY) fuzzy_draw(&ab);
 
-    /* Cursor shape. */
-    ab_append(&ab, (E.mode == MODE_NORMAL) ? "\x1b[1 q" : "\x1b[6 q", 5);
+    /* Cursor shape: terminal panes use a steady bar. */
+    int is_term_pane = E.buftabs[E.panes[E.cur_pane].buf_idx].is_term;
+    if (is_term_pane)
+        ab_append(&ab, "\x1b[6 q", 5);
+    else
+        ab_append(&ab, (E.mode == MODE_NORMAL) ? "\x1b[1 q" : "\x1b[6 q", 5);
 
     /* Cursor position. */
     char buf[32];
     int  len;
     Pane *ap = &E.panes[E.cur_pane];
-    if (E.mode == MODE_FUZZY) {
+    if (is_term_pane && E.buftabs[ap->buf_idx].term) {
+        TermState *ts = E.buftabs[ap->buf_idx].term;
+        len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
+                       ap->top + ts->c_row, ap->left + ts->c_col);
+    } else if (E.mode == MODE_FUZZY) {
         /* Cursor sits in the search input row, right after the query text. */
         int width = E.term_cols * E.opts.fuzzy_width_pct / 100;
         if (width < 40)              width = 40;

@@ -22,7 +22,7 @@ add_executable(qe ${SOURCES})
 
 find_package(Lua REQUIRED)
 target_include_directories(qe PRIVATE ${LUA_INCLUDE_DIR})
-target_link_libraries(qe ${LUA_LIBRARIES})
+target_link_libraries(qe ${LUA_LIBRARIES} util)
 
 install(TARGETS qe DESTINATION bin)
 

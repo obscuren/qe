@@ -68,6 +68,10 @@ static int l_set_option(lua_State *LS) {
         int h = (int)luaL_checkinteger(LS, 2);
         if (h >= 3 && h <= 20) E.opts.qf_height_rows = h;
         else luaL_error(LS, "qf_height must be 3-20");
+    } else if (strcmp(name, "term_height") == 0) {
+        int h = (int)luaL_checkinteger(LS, 2);
+        if (h >= 3 && h <= 50) E.opts.term_height_rows = h;
+        else luaL_error(LS, "term_height must be 3-50");
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }

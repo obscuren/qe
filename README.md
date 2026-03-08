@@ -347,6 +347,30 @@ Using `:e filename` inside a split pane opens the file in a new buffer, leaving 
 
 The terminal is automatically redrawn on resize (`SIGWINCH`); the layout collapses to a single pane on resize.
 
+### Embedded terminal
+
+| Command              | Action                                             |
+|----------------------|----------------------------------------------------|
+| `:terminal` / `:term`| Open an embedded terminal in a split below          |
+
+Opens your `$SHELL` (or `/bin/sh`) in a horizontal split below the current pane. The terminal defaults to 8 rows; configure via Lua:
+
+```lua
+qe.set_option("term_height", 12)   -- 3-50 rows
+```
+
+The terminal starts in **TERMINAL** mode where all keystrokes are forwarded to the shell.
+
+| Key sequence      | Action                                          |
+|-------------------|-------------------------------------------------|
+| `Esc` / `Ctrl-\`  | Escape to Normal mode (pane nav / commands)     |
+| `i` / `a`         | Return from Normal mode to terminal input       |
+| `p`               | Paste register contents into terminal           |
+| `:q`              | Close terminal pane (from Normal mode)          |
+| `Ctrl-W h/j/k/l` | Navigate to adjacent pane (from Normal mode)    |
+
+The terminal supports 256-color SGR, cursor positioning, scroll regions, and line editing. The PTY is resized automatically when the pane dimensions change. When the shell exits (e.g. `exit` or `Ctrl-D`), the terminal pane closes automatically. Terminal buffers are excluded from `:ls`, `:bn`/`:bp`, and the fuzzy buffer picker.
+
 ### Tab completion for `:e`
 
 Press `Tab` after `:e` (or `:e <prefix>`) to complete filenames from the current working directory. Matching files are shown in the status bar; the currently selected entry is highlighted. Press `Tab` again to cycle to the next match. Any other key dismisses the list.

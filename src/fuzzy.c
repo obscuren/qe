@@ -140,8 +140,7 @@ void fuzzy_open_buffers(void) {
     for (int i = 0; i < E.num_buftabs && f->all_count < FUZZY_MAX_FILES; i++) {
         /* Skip tree, quickfix, and other special buffers. */
         BufTab *bt = &E.buftabs[i];
-        if (bt->is_tree || bt->is_qf || bt->is_blame || bt->is_diff ||
-            bt->is_commit || bt->is_log || bt->is_show) continue;
+        if (buftab_is_special(bt)) continue;
 
         const char *fn = (i == E.cur_buftab)
             ? (E.buf.filename ? E.buf.filename : "[No Name]")
