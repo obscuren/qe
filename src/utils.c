@@ -7,9 +7,8 @@
 
 void die(const char *s) {
     write(STDOUT_FILENO, "\x1b[?1000l\x1b[?1006l", 16); /* disable mouse */
-    write(STDOUT_FILENO, "\x1b[2J",  4);
-    write(STDOUT_FILENO, "\x1b[H",   3);
-    write(STDOUT_FILENO, "\x1b[0 q", 5);  /* reset cursor shape */
+    write(STDOUT_FILENO, "\x1b[?1049l", 8);              /* leave alt screen */
+    write(STDOUT_FILENO, "\x1b[0 q", 5);                 /* reset cursor shape */
     perror(s);
     exit(EXIT_FAILURE);
 }
