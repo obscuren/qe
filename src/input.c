@@ -5409,11 +5409,10 @@ static void editor_process_search(int c) {
         }
 
         case 127:  /* Backspace */
-            if (E.searchlen > 0) {
+            if (E.searchlen > 0)
                 E.searchbuf[--E.searchlen] = '\0';
-                if (E.searchlen == 0)
-                    E.mode = MODE_NORMAL;
-            }
+            else
+                E.mode = MODE_NORMAL;  /* backspace on empty "/" exits */
             break;
 
         default:
