@@ -4155,10 +4155,34 @@ static void editor_process_normal(int c) {
             editor_update_git_signs();
             break;
 
-        case 'r':
+        case 0x12:  /* Ctrl-R = redo */
             for (int i = 0; i < n; i++) editor_redo();
             editor_update_git_signs();
             break;
+
+        /* --- r: replace character under cursor --- */
+        case 'r': {
+            int rk = editor_read_key();
+            if (rk == '\x1b') break;
+            if (rk < 32 || rk > 126) break;
+            if (E.cy < E.buf.numrows) {
+                Row *row = &E.buf.rows[E.cy];
+                if (E.cx < row->len) {
+                    push_undo();
+                    for (int i = 0; i < n && E.cx + i < row->len; i++)
+                        row->chars[E.cx + i] = (char)rk;
+                    E.buf.dirty++;
+                    buf_mark_hl_dirty(&E.buf, E.cy);
+                    if (!E.is_replaying) {
+                        la_free();
+                        E.last_action.type   = LA_REPLACE;
+                        E.last_action.count  = n;
+                        E.last_action.motion = (char)rk;
+                    }
+                }
+            }
+            break;
+        }
 
         /* --- search repeat (n times) --- */
         case 'n': {
@@ -4290,6 +4314,18 @@ static void editor_process_normal(int c) {
                     indent_lines(E.cy, E.cy + use_n - 1, (char)E.last_action.motion);
                     E.cx = 0;
                     break;
+                case LA_REPLACE: {
+                    if (E.cy >= E.buf.numrows) break;
+                    Row *row = &E.buf.rows[E.cy];
+                    if (E.cx >= row->len) break;
+                    push_undo();
+                    char rch = (char)E.last_action.motion;
+                    for (int i = 0; i < use_n && E.cx + i < row->len; i++)
+                        row->chars[E.cx + i] = rch;
+                    E.buf.dirty++;
+                    buf_mark_hl_dirty(&E.buf, E.cy);
+                    break;
+                }
                 case LA_DELETE:
                     editor_apply_op('d', E.last_action.motion, use_n);
                     break;

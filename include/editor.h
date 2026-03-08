@@ -118,7 +118,7 @@ typedef struct {
     struct {
         enum {
             LA_NONE, LA_X, LA_DELETE, LA_CHANGE, LA_PASTE, LA_INSERT, LA_OPEN,
-            LA_INDENT,
+            LA_INDENT, LA_REPLACE,
         } type;
         int   count;
         int   motion;       /* LA_DELETE / LA_CHANGE: motion key                */

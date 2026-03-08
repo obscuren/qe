@@ -115,7 +115,8 @@ Enter insert mode with `i` (before cursor), `a` (after cursor), `o` (new line be
 | `x`        | Delete character under cursor                  |
 | `.`        | Repeat last change (count overrides stored count) |
 | `u`        | Undo                                           |
-| `r`        | Redo                                           |
+| `Ctrl-R`   | Redo                                           |
+| `r{char}`  | Replace character(s) under cursor with `{char}` |
 | `n`        | Repeat search forward                          |
 | `N`        | Repeat search backward                         |
 | `p`        | Paste after cursor / below current line        |
