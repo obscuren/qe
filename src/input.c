@@ -333,6 +333,7 @@ static int pos_find_char(int *r, int *c, char key, char target, int n) {
 static int reg_consume(void) {
     int r = E.pending_reg;
     E.pending_reg = -1;
+    if (r == REG_CLIPBOARD) return REG_CLIPBOARD;
     return (r >= 1 && r <= 26) ? r : 0;
 }
 
@@ -354,13 +355,69 @@ static void reg_copy(int dst, int src) {
         E.regs[dst].rows[i] = strdup(E.regs[src].rows[i]);
 }
 
-/* Write to a register + always mirror into unnamed (reg 0). */
+/* Copy register contents to system clipboard via available tool. */
+static void clipboard_copy(int ri) {
+    if (!E.regs[ri].rows || E.regs[ri].numrows == 0) return;
+    /* Try wl-copy (Wayland), then xclip, then xsel. */
+    const char *cmds[] = {
+        "wl-copy 2>/dev/null",
+        "xclip -selection clipboard 2>/dev/null",
+        "xsel --clipboard --input 2>/dev/null",
+        NULL
+    };
+    for (int ci = 0; cmds[ci]; ci++) {
+        FILE *fp = popen(cmds[ci], "w");
+        if (!fp) continue;
+        for (int i = 0; i < E.regs[ri].numrows; i++) {
+            fputs(E.regs[ri].rows[i], fp);
+            if (i < E.regs[ri].numrows - 1 || E.regs[ri].linewise)
+                fputc('\n', fp);
+        }
+        if (pclose(fp) == 0) return;
+    }
+}
+
+/* Fetch system clipboard into a register. */
+static void clipboard_paste(int ri) {
+    const char *cmds[] = {
+        "wl-paste -n 2>/dev/null",
+        "xclip -selection clipboard -o 2>/dev/null",
+        "xsel --clipboard --output 2>/dev/null",
+        NULL
+    };
+    for (int ci = 0; cmds[ci]; ci++) {
+        FILE *fp = popen(cmds[ci], "r");
+        if (!fp) continue;
+        char *buf = NULL; size_t cap = 0; ssize_t len;
+        int nrows = 0;
+        char **rows = NULL;
+        while ((len = getline(&buf, &cap, fp)) > 0) {
+            if (len > 0 && buf[len-1] == '\n') buf[--len] = '\0';
+            rows = realloc(rows, sizeof(char *) * (nrows + 1));
+            rows[nrows++] = strdup(buf);
+        }
+        free(buf);
+        if (pclose(fp) == 0 && nrows > 0) {
+            reg_free(ri);
+            E.regs[ri].rows     = rows;
+            E.regs[ri].numrows  = nrows;
+            E.regs[ri].linewise = 0;
+            return;
+        }
+        for (int i = 0; i < nrows; i++) free(rows[i]);
+        free(rows);
+    }
+}
+
+/* Write to a register + always mirror into unnamed (reg 0).
+   If writing to clipboard register, also push to system clipboard. */
 static void reg_write(int ri, int linewise, char **rows, int numrows) {
     reg_free(ri);
     E.regs[ri].linewise = linewise;
     E.regs[ri].numrows  = numrows;
     E.regs[ri].rows     = rows;
     if (ri != 0) reg_copy(0, ri);
+    if (ri == REG_CLIPBOARD) clipboard_copy(ri);
 }
 
 static void yank_set_lines(int r0, int r1) {
@@ -949,6 +1006,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
 /* Paste from a register. before=1 pastes before cursor/line, 0 = after. */
 static void editor_paste(int before) {
     int ri = reg_consume();
+    if (ri == REG_CLIPBOARD) clipboard_paste(ri);
     if (!E.regs[ri].rows || E.regs[ri].numrows == 0) return;
     push_undo();
 
@@ -1110,6 +1168,8 @@ static void editor_process_visual(int c) {
         int r = editor_read_key();
         if (r >= 'a' && r <= 'z')
             E.pending_reg = r - 'a' + 1;
+        else if (r == '+')
+            E.pending_reg = REG_CLIPBOARD;
         return;
     }
 
@@ -3512,17 +3572,20 @@ void editor_execute_command(void) {
         int row = 1;
         for (int ri = 0; ri < REG_COUNT; ri++) {
             if (!E.regs[ri].rows || E.regs[ri].numrows == 0) continue;
-            char label = (ri == 0) ? '"' : ('a' + ri - 1);
+            char label[3];
+            if (ri == 0) { label[0] = '"'; label[1] = '\0'; }
+            else if (ri == REG_CLIPBOARD) { label[0] = '+'; label[1] = '\0'; }
+            else { label[0] = 'a' + ri - 1; label[1] = '\0'; }
             /* Build a preview: first row, truncated. */
             char line[256];
             const char *preview = E.regs[ri].rows[0];
             int extra = E.regs[ri].numrows > 1 ? E.regs[ri].numrows - 1 : 0;
             int llen;
             if (extra)
-                llen = snprintf(line, sizeof(line), " \"%c   %s (+%d lines)",
+                llen = snprintf(line, sizeof(line), " \"%s   %s (+%d lines)",
                                 label, preview, extra);
             else
-                llen = snprintf(line, sizeof(line), " \"%c   %s", label, preview);
+                llen = snprintf(line, sizeof(line), " \"%s   %s", label, preview);
             buf_insert_row(rb, row++, line, llen);
         }
         /* Show macro registers with content. */
@@ -4031,9 +4094,13 @@ static void editor_process_normal(int c) {
         int r = editor_read_key();
         if (r >= 'a' && r <= 'z') {
             E.pending_reg = r - 'a' + 1;
-            int next = editor_read_key();
-            editor_process_normal(next);
+        } else if (r == '+') {
+            E.pending_reg = REG_CLIPBOARD;
+        } else {
+            return;
         }
+        int next = editor_read_key();
+        editor_process_normal(next);
         return;
     }
 

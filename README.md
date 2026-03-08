@@ -190,8 +190,10 @@ Prefix any yank, delete, or paste with `"a` through `"z` to use a named register
 | `"ap`      | Paste from register `a`                     |
 | `"bdd`     | Delete line into register `b`               |
 | `"cy$`     | Yank to end of line into register `c`       |
+| `"+yy`     | Yank current line to system clipboard       |
+| `"+p`      | Paste from system clipboard                 |
 
-All yank/delete operations also write to the unnamed register, so `p` always pastes the most recently yanked/deleted text regardless of which named register was used. The active register is shown in the status bar.
+All yank/delete operations also write to the unnamed register, so `p` always pastes the most recently yanked/deleted text regardless of which named register was used. The `"+` register interfaces with the system clipboard (via `wl-copy`/`wl-paste`, `xclip`, or `xsel`). The active register is shown in the status bar.
 
 Use `:registers` (or `:reg`) to view all register and macro contents in a scratch buffer.
 

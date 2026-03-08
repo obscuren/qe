@@ -895,6 +895,8 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         char regstr[6]  = "";
         if (E.pending_reg >= 1 && E.pending_reg <= 26)
             snprintf(regstr, sizeof(regstr), "\"%c", 'a' + E.pending_reg - 1);
+        else if (E.pending_reg == REG_CLIPBOARD)
+            snprintf(regstr, sizeof(regstr), "\"+");
         if (E.count > 0 && E.pending_op)
             snprintf(prefix, sizeof(prefix), "%s%d%c", regstr, E.count, E.pending_op);
         else if (E.count > 0)

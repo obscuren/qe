@@ -147,14 +147,15 @@ typedef struct {
     int   preferred_col;
     int   is_replaying;    /* 1 while inside repeat_last_action()              */
 
-    /* Yank registers: 0 = unnamed (""), 1-26 = named (a-z) */
-    #define REG_COUNT 27
+    /* Yank registers: 0 = unnamed (""), 1-26 = named (a-z), 27 = clipboard ("+) */
+    #define REG_COUNT     28
+    #define REG_CLIPBOARD 27
     struct {
         char **rows;
         int    numrows;
         int    linewise;   /* 1 = line-oriented (dd/yy), 0 = char-oriented */
     } regs[REG_COUNT];
-    int    pending_reg;    /* -1 = none; 0 = unnamed; 1-26 = a-z           */
+    int    pending_reg;    /* -1 = none; 0 = unnamed; 1-26 = a-z; 27 = clipboard */
 
     /* Macro recording / playback */
     #define MACRO_REGS 26
