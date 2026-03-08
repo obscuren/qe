@@ -5361,11 +5361,10 @@ static void editor_process_command(int c) {
 
         case 127:  /* Backspace */
             completion_free();
-            if (E.cmdlen > 0) {
+            if (E.cmdlen > 0)
                 E.cmdbuf[--E.cmdlen] = '\0';
-                if (E.cmdlen == 0)
-                    E.mode = MODE_NORMAL;
-            }
+            else
+                E.mode = MODE_NORMAL;  /* backspace on empty ":" exits */
             break;
 
         default:
