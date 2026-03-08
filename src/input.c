@@ -3295,6 +3295,10 @@ void editor_execute_command(void) {
                     if (errs && !df) goto done; /* abort before quit */
                 } else {
                     /* :w / :wq[!] — write current buffer */
+                    if (E.readonly && !df) {
+                        status_err("Read-only mode (use :w! to override)");
+                        goto done;
+                    }
                     if (arg) {
                         free(E.buf.filename);
                         E.buf.filename = strdup(arg);
@@ -3838,6 +3842,7 @@ done:
 /* Begin an insert session: snapshot state for undo, then switch mode.
    entry is the key that triggered insert ('i', 'a', 'A', 'o', 'O'). */
 static void enter_insert_mode(char entry) {
+    if (E.readonly) { status_err("Read-only mode"); return; }
     E.pre_insert_snapshot = editor_capture_state();
     E.pre_insert_dirty    = E.buf.dirty;
     E.has_pre_insert      = 1;

@@ -31,7 +31,33 @@ sudo apt install liblua5.4-dev
 ```bash
 qe                  # open empty buffer
 qe file.c           # open a file
+qe +42 file.c       # open file at line 42
+qe -R file.c        # open file read-only
+qe src/             # open directory tree
 ```
+
+### CLI subcommands
+
+```bash
+qe cat file.c       # syntax-highlighted cat
+qe diff file.c      # colored git diff vs HEAD
+qe blame file.c     # colored git blame
+qe log              # colored git log (default 50 entries)
+qe log --limit 20   # limit number of entries
+qe grep pattern     # recursive grep with colors
+qe grep pattern src/ # grep in specific path
+```
+
+CLI subcommands output directly to the terminal and exit — they don't start the editor. Custom subcommands can be added via Lua:
+
+```lua
+qe.add_command("hello", function(args)
+    print("Hello from qe! Args: " .. table.concat(args, ", "))
+    return 0  -- exit code
+end)
+```
+
+Then run: `qe hello world` → `Hello from qe! Args: world`
 
 ---
 

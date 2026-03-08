@@ -78,6 +78,7 @@ typedef struct {
     int           screenrows;
     int           screencols;
     EditorMode    mode;
+    int           readonly;       /* 1 = -R flag, blocks editing commands      */
     Buffer        buf;
     EditorOptions opts;
     char          cmdbuf[256];      /* command-line input */

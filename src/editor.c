@@ -16,6 +16,7 @@ void editor_init(void) {
     E.rowoff = 0;
     E.coloff = 0;
     E.mode = MODE_NORMAL;
+    E.readonly     = 0;
     E.cmdbuf[0]    = '\0';
     E.cmdlen       = 0;
     E.statusmsg[0] = '\0';
@@ -28,8 +29,10 @@ void editor_init(void) {
 
     buf_init(&E.buf);
 
-    if (term_get_size(&E.term_rows, &E.term_cols) == -1)
-        die("term_get_size");
+    if (term_get_size(&E.term_rows, &E.term_cols) == -1) {
+        E.term_rows = 24;  /* sensible defaults for non-interactive use */
+        E.term_cols = 80;
+    }
 
     E.screenrows = E.term_rows - 2;  /* status bar + command bar */
     E.screencols = E.term_cols;

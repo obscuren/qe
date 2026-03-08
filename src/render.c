@@ -889,8 +889,10 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         char branch[80] = "";
         if (E.git_branch[0])
             snprintf(branch, sizeof(branch), "  %s", E.git_branch);
-        llen = snprintf(left, sizeof(left), " %.30s%s%s%s",
-                        name, buf->dirty ? " [+]" : "", bufnum, branch);
+        const char *mod = buf->dirty ? " [+]" : "";
+        const char *ro  = E.readonly ? " [RO]" : "";
+        llen = snprintf(left, sizeof(left), " %.30s%s%s%s%s",
+                        name, mod, ro, bufnum, branch);
         char prefix[24] = "";
         char regstr[6]  = "";
         if (E.pending_reg >= 1 && E.pending_reg <= 26)

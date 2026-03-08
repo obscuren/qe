@@ -199,13 +199,27 @@ static int l_add_syntax(lua_State *LS) {
     return 0;
 }
 
+/* ── qe.add_command ──────────────────────────────────────────────────── */
+
+#include "cli.h"
+
+static int l_add_command(lua_State *LS) {
+    const char *name = luaL_checkstring(LS, 1);
+    luaL_checktype(LS, 2, LUA_TFUNCTION);
+    lua_pushvalue(LS, 2);
+    int ref = luaL_ref(LS, LUA_REGISTRYINDEX);
+    cli_register_lua_command(name, ref);
+    return 0;
+}
+
 static const luaL_Reg qe_lib[] = {
-    {"set_option",  l_set_option},
-    {"print",       l_print},
-    {"bind_key",    l_bind_key},
-    {"command",     l_command},
-    {"add_syntax",  l_add_syntax},
-    {NULL,          NULL}
+    {"set_option",   l_set_option},
+    {"print",        l_print},
+    {"bind_key",     l_bind_key},
+    {"command",      l_command},
+    {"add_syntax",   l_add_syntax},
+    {"add_command",  l_add_command},
+    {NULL,           NULL}
 };
 
 /* ── Config loading ──────────────────────────────────────────────────── */
@@ -273,4 +287,28 @@ void lua_bridge_init(void) {
     atexit(close_lua);
 
     load_config();
+}
+
+int lua_bridge_cli(const char *name, int argc, char **argv) {
+    int ref = cli_dispatch_lua(name, argc, argv);
+    if (ref < 0) return 1;
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+
+    /* Push argv as a Lua table. */
+    lua_newtable(L);
+    for (int i = 2; i < argc; i++) {
+        lua_pushstring(L, argv[i]);
+        lua_rawseti(L, -2, i - 1);
+    }
+
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        fprintf(stderr, "qe: lua: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
+        return 1;
+    }
+
+    int ret = lua_isinteger(L, -1) ? (int)lua_tointeger(L, -1) : 0;
+    lua_pop(L, 1);
+    return ret;
 }
