@@ -3659,6 +3659,11 @@ void editor_execute_command(void) {
             status_msg("Buffer %d/%d", E.cur_buftab + 1, E.num_buftabs);
         }
 
+    /* ── :buffers — fuzzy buffer picker ───────────────────────────── */
+    } else if (strcmp(cmd, "buffers") == 0) {
+        fuzzy_open_buffers();
+        goto done;
+
     /* ── :ls ───────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "ls") == 0) {
         char msg[128];
@@ -3898,6 +3903,10 @@ static void editor_process_normal(int c) {
         E.pending_leader = 0;
         if (c == 'h') {
             E.pending_leader_h = 1;
+            return;
+        }
+        if (c == 'b') {
+            fuzzy_open_buffers();
             return;
         }
         if (!lua_bridge_call_key(MODE_NORMAL, LEADER_BASE + c))
@@ -4934,13 +4943,27 @@ static void editor_process_fuzzy(int c) {
 
     if (c == '\x1b') { fuzzy_close(); return; }
 
-    if (c == '\r') {   /* Enter: open in current pane */
+    if (c == '\r') {   /* Enter: open in current pane / switch buffer */
         if (f->match_count > 0) {
-            char path[512];
-            strncpy(path, f->matches[f->selected].path, sizeof(path) - 1);
-            path[sizeof(path)-1] = '\0';
-            fuzzy_close();
-            open_new_buf(path);
+            if (f->buf_mode) {
+                int oi = f->matches[f->selected].orig_idx;
+                int bi = f->buf_indices[oi];
+                fuzzy_close();
+                if (bi != E.cur_buftab) {
+                    pane_save_cursor();
+                    editor_buf_save(E.cur_buftab);
+                    E.panes[E.cur_pane].buf_idx = bi;
+                    E.cur_buftab = bi;
+                    editor_buf_restore(bi);
+                    editor_detect_syntax();
+                }
+            } else {
+                char path[512];
+                strncpy(path, f->matches[f->selected].path, sizeof(path) - 1);
+                path[sizeof(path)-1] = '\0';
+                fuzzy_close();
+                open_new_buf(path);
+            }
         } else {
             fuzzy_close();
         }

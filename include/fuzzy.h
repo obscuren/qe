@@ -10,6 +10,7 @@ typedef struct {
     int   score;
     int   match_pos[256];    /* byte offsets of matched query chars in path */
     int   match_count;
+    int   orig_idx;          /* index into all_files[]                      */
 } FuzzyMatch;
 
 typedef struct {
@@ -21,9 +22,12 @@ typedef struct {
     int         match_count;
     int         selected;    /* highlighted result row (0-based)          */
     int         scroll;      /* first visible result row                  */
+    int         buf_mode;    /* 1 = buffer picker, 0 = file picker       */
+    int        *buf_indices; /* buftab index for each all_files entry     */
 } FuzzyState;
 
 void fuzzy_open(void);
+void fuzzy_open_buffers(void);
 void fuzzy_close(void);
 void fuzzy_filter(void);
 

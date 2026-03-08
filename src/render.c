@@ -1006,14 +1006,15 @@ static void fuzzy_draw(AppendBuf *ab) {
             ab_append(ab, "\x1b[m", 3);
             ab_append(ab, "│", 3);
             ab_append(ab, " ", 1);
-            ab_append(ab, "\x1b[33m",   5);  /* dark yellow: "search:" */
-            ab_append(ab, "search:",    7);
+            const char *label = f->buf_mode ? "buffer:" : "search:";
+            ab_append(ab, "\x1b[33m",   5);  /* dark yellow */
+            ab_append(ab, label,    7);
             ab_append(ab, "\x1b[1;37m", 7);  /* bold white: " > " */
             ab_append(ab, " > ",        3);
             ab_append(ab, "\x1b[m",     3);
 
             /* Query text — show tail if it overflows. */
-            int avail  = inner - 1 - 7 - 3;  /* space + "search:" + " > " */
+            int avail  = inner - 1 - 7 - 3;  /* space + label + " > " */
             int qstart = (f->query_len > avail) ? f->query_len - avail : 0;
             int qshow  = f->query_len - qstart;
             ab_append(ab, f->query + qstart, qshow);
@@ -1047,7 +1048,9 @@ static void fuzzy_draw(AppendBuf *ab) {
                                  "%d / %d", f->match_count, f->all_count);
             ab_append(ab, count_str, clen);
             /* Hints right-aligned. */
-            const char *hints = "<Enter> open  <C-x> sp  <C-v> vsp  <Esc> close";
+            const char *hints = f->buf_mode
+                ? "<Enter> switch  <Esc> close"
+                : "<Enter> open  <C-x> sp  <C-v> vsp  <Esc> close";
             int hlen = (int)strlen(hints);
             int gap  = inner - 1 - clen - hlen;
             if (gap > 0) {

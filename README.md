@@ -279,6 +279,8 @@ All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) 
 | `:bp`            | Switch to previous buffer                    |
 | `:b N`           | Switch to buffer N (1-indexed)               |
 | `:ls`            | List open buffers in status bar              |
+| `:buffers`       | Fuzzy buffer picker                          |
+| `<leader>b`      | Fuzzy buffer picker (default leader: Space)  |
 | `:set nu`        | Show line numbers                            |
 | `:set nonu`      | Hide line numbers                            |
 

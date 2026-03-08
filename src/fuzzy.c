@@ -103,6 +103,7 @@ void fuzzy_filter(void) {
         strncpy(m->path, f->all_files[i], sizeof(m->path) - 1);
         m->path[sizeof(m->path)-1] = '\0';
         m->score = score;
+        m->orig_idx = i;
         m->match_count = f->query_len < 256 ? f->query_len : 255;
         memcpy(m->match_pos, tmp, sizeof(int) * m->match_count);
     }
@@ -127,6 +128,35 @@ void fuzzy_open(void) {
     E.mode = MODE_FUZZY;
 }
 
+void fuzzy_open_buffers(void) {
+    FuzzyState *f = &E.fuzzy;
+    memset(f, 0, sizeof(*f));
+    f->buf_mode   = 1;
+    f->all_files  = malloc(sizeof(char *) * FUZZY_MAX_FILES);
+    f->matches    = malloc(sizeof(FuzzyMatch) * FUZZY_MAX_FILES);
+    f->buf_indices = malloc(sizeof(int) * FUZZY_MAX_FILES);
+    if (!f->all_files || !f->matches || !f->buf_indices) { fuzzy_close(); return; }
+
+    for (int i = 0; i < E.num_buftabs && f->all_count < FUZZY_MAX_FILES; i++) {
+        /* Skip tree, quickfix, and other special buffers. */
+        BufTab *bt = &E.buftabs[i];
+        if (bt->is_tree || bt->is_qf || bt->is_blame || bt->is_diff ||
+            bt->is_commit || bt->is_log || bt->is_show) continue;
+
+        const char *fn = (i == E.cur_buftab)
+            ? (E.buf.filename ? E.buf.filename : "[No Name]")
+            : (bt->buf.filename ? bt->buf.filename : "[No Name]");
+        int dirty = (i == E.cur_buftab) ? E.buf.dirty : bt->buf.dirty;
+
+        char label[520];
+        snprintf(label, sizeof(label), "%s%s", fn, dirty ? " [+]" : "");
+        f->buf_indices[f->all_count] = i;
+        f->all_files[f->all_count++] = strdup(label);
+    }
+    fuzzy_filter();
+    E.mode = MODE_FUZZY;
+}
+
 void fuzzy_close(void) {
     FuzzyState *f = &E.fuzzy;
     if (f->all_files) {
@@ -134,6 +164,7 @@ void fuzzy_close(void) {
         free(f->all_files);
     }
     free(f->matches);
+    free(f->buf_indices);
     memset(f, 0, sizeof(*f));
     E.mode = MODE_NORMAL;
 }
