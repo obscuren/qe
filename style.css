@@ -153,15 +153,9 @@ nav {
 }
 
 .research-note {
-    display: inline-block;
     font-size: 0.85rem;
-    color: var(--text-dim);
-    background: rgba(88, 166, 255, 0.08);
-    border: 1px solid rgba(88, 166, 255, 0.15);
-    border-radius: 6px;
-    padding: 0.4rem 1rem;
+    color: #6e7681;
     margin: 0.25rem auto 2.5rem;
-    letter-spacing: 0.01em;
 }
 
 .research-note a {
