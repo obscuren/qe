@@ -74,6 +74,11 @@ static int l_set_option(lua_State *LS) {
         else luaL_error(LS, "term_height must be 3-50");
     } else if (strcmp(name, "autopairs") == 0) {
         E.opts.autopairs = lua_toboolean(LS, 2);
+    } else if (strcmp(name, "cursorline") == 0) {
+        E.opts.cursorline = lua_toboolean(LS, 2);
+    } else if (strcmp(name, "scrolloff") == 0) {
+        int so = (int)luaL_checkinteger(LS, 2);
+        E.opts.scrolloff = so >= 0 ? so : 0;
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }

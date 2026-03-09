@@ -110,14 +110,18 @@ static int visible_row_back(int start, int n) {
 
 static void editor_scroll(void) {
     int content_cols = E.screencols - gutter_width();
+    int so = E.opts.scrolloff;
+    /* Clamp scrolloff so it can't exceed half the screen. */
+    if (so > E.screenrows / 2) so = E.screenrows / 2;
 
-    if (E.cy < E.rowoff)
-        E.rowoff = E.cy;
+    if (E.cy < E.rowoff + so)
+        E.rowoff = E.cy - so;
+    if (E.rowoff < 0) E.rowoff = 0;
 
-    /* Count visible rows from rowoff to cy; if > screenrows, scroll down. */
+    /* Count visible rows from rowoff to cy; if > screenrows-scrolloff, scroll down. */
     int vis = visible_rows_between(E.rowoff, E.cy);
-    if (vis >= E.screenrows)
-        E.rowoff = visible_row_back(E.cy, E.screenrows - 1);
+    if (vis >= E.screenrows - so)
+        E.rowoff = visible_row_back(E.cy, E.screenrows - 1 - so);
 
     /* Horizontal scroll uses visual column so tabs scroll correctly. */
     int vcx = 0;
@@ -221,7 +225,7 @@ static void render_row_content(AppendBuf *ab, const Row *row,
                                int vcol_start, int vcol_count, int tabwidth,
                                const SearchQuery *q, int bm0, int bm1,
                                int vis_c0, int vis_c1, int cursor_col,
-                               char diff_bg) {
+                               char diff_bg, int cursorline) {
     if (vcol_count <= 0 || row->len == 0) return;
 
     /* Build final_hl[row->len] — byte-indexed highlight array. */
@@ -265,8 +269,10 @@ static void render_row_content(AppendBuf *ab, const Row *row,
     if (cursor_col >= 0 && cursor_col < row->len)
         fhl[cursor_col] = row->hl ? row->hl[cursor_col] : HL_NORMAL;
 
-    /* Diff background (RGB): dark opaque tints. */
+    /* Row background: diff tint or cursorline. */
     const char *bg_esc = diff_bg_escape(diff_bg);
+    if (!bg_esc && cursorline)
+        bg_esc = "\x1b[48;5;236m";
     int bg_esc_len = bg_esc ? (int)strlen(bg_esc) : 0;
 
     /* Render char by char, expanding tabs, clipped to the vcol viewport. */
@@ -478,6 +484,15 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             row_dbg = buf->git_signs[filerow];
             row_bg  = diff_bg_escape(row_dbg);
         }
+
+        /* Cursorline: subtle background on the cursor row (content panes only). */
+        int is_cursorline = 0;
+        if (!row_bg && E.opts.cursorline && !no_gutter
+            && filerow == pcy && filerow < buf->numrows) {
+            row_bg = "\x1b[48;5;236m";
+            is_cursorline = 1;
+        }
+
         if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
 
         /* Erase this pane row (only within pane width).
@@ -801,7 +816,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
 
             render_row_content(ab, row, pco, content_cols,
                                E.opts.tabwidth, hl_q,
-                               bm0, bm1, vis_c0, vis_c1, cur_col, dbg);
+                               bm0, bm1, vis_c0, vis_c1, cur_col,
+                               dbg, is_cursorline);
 
             /* Fold indicator: show "[N lines]" after fold header. */
             if (buf->folds && filerow < buf->folds_cap && buf->folds[filerow]) {

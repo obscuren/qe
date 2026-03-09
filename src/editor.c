@@ -35,6 +35,8 @@ void editor_init(void) {
     E.opts.qf_height_rows  = 8;
     E.opts.term_height_rows = 8;
     E.opts.autopairs        = 1;
+    E.opts.cursorline       = 1;
+    E.opts.scrolloff        = 0;
 
     buf_init(&E.buf);
 
