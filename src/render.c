@@ -860,6 +860,10 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                     ab_append(ab, finfo, flen);
                 }
             }
+
+            /* Reset attributes after row content to prevent background
+               leaking to the next line (e.g. cursorline on empty rows). */
+            if (row_bg) ab_append(ab, "\x1b[m", 3);
         }
 
         /* Advance fr: if this row is a closed fold, skip its body. */
