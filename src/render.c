@@ -544,6 +544,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
 
                 ab_append(ab, "\x1b[m", 3);
             }
+            fr++;
             continue;
         }
 
@@ -572,6 +573,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
 
             ab_append(ab, row->chars, rlen);
             ab_append(ab, "\x1b[m", 3);
+            fr++;
             continue;
         }
 
@@ -598,6 +600,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             }
 
             ab_append(ab, "\x1b[m", 3);
+            fr++;
             continue;
         }
 
@@ -611,6 +614,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             ab_append(ab, row->chars, rlen);
             if (rlen > 0 && row->chars[0] == '#')
                 ab_append(ab, "\x1b[m", 3);
+            fr++;
             continue;
         }
 
@@ -679,6 +683,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             }
 
             ab_append(ab, "\x1b[m", 3);
+            fr++;
             continue;
         }
 
