@@ -32,8 +32,7 @@ typedef struct {
 typedef struct {
     Buffer    buf;
     int       cx, cy, rowoff, coloff;
-    UndoStack undo_stack;
-    UndoStack redo_stack;
+    UndoTree  undo_tree;
     UndoState pre_insert_snapshot;
     int       pre_insert_dirty;
     int       has_pre_insert;
@@ -110,9 +109,8 @@ typedef struct {
     SearchQuery   last_query;       /* last executed query — used by n / N */
     int           last_search_valid; /* 1 when last_query holds a valid query */
 
-    /* Undo / redo */
-    UndoStack     undo_stack;
-    UndoStack     redo_stack;
+    /* Undo / redo (tree-based) */
+    UndoTree      undo_tree;
     UndoState     pre_insert_snapshot; /* captured on entering insert mode */
     int           pre_insert_dirty;    /* buf.dirty value at that moment */
     int           has_pre_insert;      /* 1 when snapshot is valid */

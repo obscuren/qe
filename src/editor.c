@@ -59,8 +59,7 @@ void editor_init(void) {
                          .height=E.screenrows, .width=E.screencols,
                          .buf_idx=0 };
 
-    E.undo_stack.count = 0;
-    E.redo_stack.count = 0;
+    undo_tree_init(&E.undo_tree);
     E.has_pre_insert   = 0;
 
     E.searchbuf[0]      = '\0';
@@ -169,7 +168,7 @@ void editor_buf_save(int i) {
     /* Commit or discard any pending pre-insert snapshot. */
     if (E.has_pre_insert) {
         if (E.buf.dirty != E.pre_insert_dirty)
-            undo_push(&E.undo_stack, E.pre_insert_snapshot);
+            undo_tree_push(&E.undo_tree, E.pre_insert_snapshot, "insert");
         else
             undo_state_free(&E.pre_insert_snapshot);
         memset(&E.pre_insert_snapshot, 0, sizeof(UndoState));
@@ -184,9 +183,9 @@ void editor_buf_save(int i) {
     t->cx = E.cx; t->cy = E.cy;
     t->rowoff = E.rowoff; t->coloff = E.coloff;
 
-    /* Move undo stacks — copy fixed array, zero source count. */
-    t->undo_stack = E.undo_stack;  E.undo_stack.count = 0;
-    t->redo_stack = E.redo_stack;  E.redo_stack.count = 0;
+    /* Move undo tree — pointer ownership transfers to BufTab. */
+    t->undo_tree = E.undo_tree;
+    undo_tree_init(&E.undo_tree);
 
     t->pre_insert_snapshot = E.pre_insert_snapshot;
     t->pre_insert_dirty    = E.pre_insert_dirty;
@@ -205,8 +204,8 @@ void editor_buf_restore(int i) {
     E.cx = t->cx; E.cy = t->cy;
     E.rowoff = t->rowoff; E.coloff = t->coloff;
 
-    E.undo_stack = t->undo_stack;  t->undo_stack.count = 0;
-    E.redo_stack = t->redo_stack;  t->redo_stack.count = 0;
+    E.undo_tree = t->undo_tree;
+    undo_tree_init(&t->undo_tree);
 
     E.pre_insert_snapshot = t->pre_insert_snapshot;
     E.pre_insert_dirty    = t->pre_insert_dirty;

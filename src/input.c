@@ -632,9 +632,11 @@ static void replay_insert_text(const char *text, int len) {
 
 /* ── Operator + motion ───────────────────────────────────────────────── */
 
-static void push_undo(void) {
-    undo_push(&E.undo_stack, editor_capture_state());
-    undo_stack_clear(&E.redo_stack);
+static void push_undo(const char *desc) {
+    if (!E.undo_tree.root)
+        undo_tree_set_root(&E.undo_tree, editor_capture_state(), "initial");
+    else
+        undo_tree_push(&E.undo_tree, editor_capture_state(), desc);
 }
 
 /* Indent (dir='>') or outdent (dir='<') lines r0..r1 by one tabwidth. */
@@ -799,7 +801,7 @@ static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
                 E.pre_insert_dirty    = E.buf.dirty;
                 E.has_pre_insert      = 1;
             } else {
-                push_undo();
+                push_undo("delete");
             }
             Row *rw = &E.buf.rows[r0];
             for (int i = c1 - 1; i >= c0; i--)
@@ -828,7 +830,7 @@ static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
                 E.pre_insert_dirty    = E.buf.dirty;
                 E.has_pre_insert      = 1;
             } else {
-                push_undo();
+                push_undo("delete");
             }
             int   tail_len = E.buf.rows[r1].len - c1;
             char *tail     = malloc(tail_len + 1);
@@ -895,7 +897,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
         if (r1 >= E.buf.numrows) r1 = E.buf.numrows - 1;
 
         if (op == '>' || op == '<') {
-            push_undo();
+            push_undo("indent");
             indent_lines(r0, r1, (char)op);
             E.cx = 0;
             if (!E.is_replaying) {
@@ -909,7 +911,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
 
         yank_set_lines(r0, r1);
         if (op == 'd') {
-            push_undo();
+            push_undo("delete lines");
             for (int i = r1; i >= r0; i--)
                 buf_delete_row(&E.buf, i);
             if (E.cy >= E.buf.numrows && E.cy > 0) E.cy--;
@@ -1021,7 +1023,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
                 E.pre_insert_dirty    = E.buf.dirty;
                 E.has_pre_insert      = 1;
             } else {
-                push_undo();
+                push_undo("delete");
             }
             /* Save tail of end row, then merge: row sr[0..sc) + row er[ec..end). */
             int   tail_len = E.buf.rows[er].len - ec;
@@ -1080,7 +1082,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
             E.pre_insert_dirty    = E.buf.dirty;
             E.has_pre_insert      = 1;
         } else {
-            push_undo();
+            push_undo("delete");
         }
         Row *row = &E.buf.rows[E.cy];
         for (int i = c1 - 1; i >= c0; i--)
@@ -1109,7 +1111,7 @@ static void editor_paste(int before) {
     int ri = reg_consume();
     if (ri == REG_CLIPBOARD) clipboard_paste(ri);
     if (!E.regs[ri].rows || E.regs[ri].numrows == 0) return;
-    push_undo();
+    push_undo("paste");
 
     char **yr = E.regs[ri].rows;
     int    yn = E.regs[ri].numrows;
@@ -1209,7 +1211,7 @@ static void visual_op_delete(void) {
     E.mode = MODE_NORMAL;
     if (linewise) {
         yank_set_lines(r0, r1);
-        push_undo();
+        push_undo("delete lines");
         for (int i = r1; i >= r0; i--)
             buf_delete_row(&E.buf, i);
         E.cy = r0;
@@ -1219,7 +1221,7 @@ static void visual_op_delete(void) {
         int end = c1 + 1;
         if (end > E.buf.rows[r0].len) end = E.buf.rows[r0].len;
         yank_set_chars(r0, c0, end);
-        push_undo();
+        push_undo("delete");
         Row *row = &E.buf.rows[r0];
         for (int i = end - 1; i >= c0; i--)
             buf_row_delete_char(row, i);
@@ -1275,7 +1277,7 @@ static void visual_block_bounds(int *r0, int *r1, int *lc, int *rc) {
 static void visual_block_delete(void) {
     int r0, r1, lc, rc;
     visual_block_bounds(&r0, &r1, &lc, &rc);
-    push_undo();
+    push_undo("block delete");
     E.mode = MODE_NORMAL;
     for (int r = r0; r <= r1 && r < E.buf.numrows; r++) {
         Row *row = &E.buf.rows[r];
@@ -1381,7 +1383,7 @@ static void editor_process_visual(int c) {
             int ar = E.visual_anchor_row, cr = E.cy;
             int r0 = ar < cr ? ar : cr;
             int r1 = ar > cr ? ar : cr;
-            push_undo();
+            push_undo("indent");
             indent_lines(r0, r1, (char)c);
             E.cx = 0;
             E.mode = MODE_NORMAL;
@@ -1732,8 +1734,7 @@ static void tree_activate_entry(void) {
                 E.panes[E.cur_pane].buf_idx = E.cur_buftab;
         } else {
             buf_free(&E.buf);
-            undo_stack_clear(&E.undo_stack);
-            undo_stack_clear(&E.redo_stack);
+            undo_tree_free(&E.undo_tree);
             if (E.has_pre_insert) {
                 undo_state_free(&E.pre_insert_snapshot);
                 E.has_pre_insert = 0;
@@ -2776,7 +2777,7 @@ static void hunk_revert(void) {
     if (!head_lines) { status_err("Cannot read HEAD version"); return; }
 
     /* Push undo before modifying buffer. */
-    push_undo();
+    push_undo("sort");
 
     /* Delete new lines from buffer (new_start is 1-based). */
     int del_from = h.new_start - 1;  /* 0-based */
@@ -3292,8 +3293,7 @@ static int close_cur_buf(int force) {
         E.buftabs[E.cur_buftab].is_term = 0;
     }
     buf_free(&E.buf);
-    undo_stack_clear(&E.undo_stack);
-    undo_stack_clear(&E.redo_stack);
+    undo_tree_free(&E.undo_tree);
     if (E.has_pre_insert) {
         undo_state_free(&E.pre_insert_snapshot);
         E.has_pre_insert = 0;
@@ -4063,8 +4063,7 @@ void editor_execute_command(void) {
                 E.panes[E.cur_pane].buf_idx = E.cur_buftab;
         } else {
             buf_free(&E.buf);
-            undo_stack_clear(&E.undo_stack);
-            undo_stack_clear(&E.redo_stack);
+            undo_tree_free(&E.undo_tree);
             if (E.has_pre_insert) {
                 undo_state_free(&E.pre_insert_snapshot);
                 E.has_pre_insert = 0;
@@ -4211,7 +4210,7 @@ void editor_execute_command(void) {
         memcpy(rep_copy, rep, rlen);
         rep_copy[rlen] = '\0';
 
-        push_undo();
+        push_undo("substitute");
 
         int total = 0;
         int first_changed = -1;
@@ -4255,26 +4254,61 @@ static void enter_insert_mode(char entry) {
     insert_rec_reset();
 }
 
+static void editor_earlier(void) {
+    if (!E.undo_tree.root) { status_err("No undo history"); return; }
+    if (E.undo_tree.current) {
+        undo_state_free(&E.undo_tree.current->state);
+        E.undo_tree.current->state = editor_capture_state();
+    }
+    UndoNode *prev = undo_tree_earlier(&E.undo_tree);
+    if (!prev) { status_err("Already at oldest change"); return; }
+    editor_restore_state(&prev->state);
+}
+
+static void editor_later(void) {
+    if (!E.undo_tree.root || !E.undo_tree.current) {
+        status_err("No undo history"); return;
+    }
+    undo_state_free(&E.undo_tree.current->state);
+    E.undo_tree.current->state = editor_capture_state();
+    UndoNode *next = undo_tree_later(&E.undo_tree);
+    if (!next) { status_err("Already at newest change"); return; }
+    editor_restore_state(&next->state);
+}
+
 static void editor_undo(void) {
-    UndoState prev;
-    if (undo_pop(&E.undo_stack, &prev) == -1) {
+    if (!E.undo_tree.root) {
         status_err("Already at oldest change");
         return;
     }
-    undo_push(&E.redo_stack, editor_capture_state());
-    editor_restore_state(&prev);
-    undo_state_free(&prev);
+    /* Save current buffer state into the current node before moving. */
+    if (E.undo_tree.current) {
+        undo_state_free(&E.undo_tree.current->state);
+        E.undo_tree.current->state = editor_capture_state();
+    }
+    UndoNode *prev = undo_tree_undo(&E.undo_tree);
+    if (!prev) {
+        status_err("Already at oldest change");
+        return;
+    }
+    editor_restore_state(&prev->state);
 }
 
 static void editor_redo(void) {
-    UndoState next;
-    if (undo_pop(&E.redo_stack, &next) == -1) {
+    if (!E.undo_tree.root || !E.undo_tree.current) {
         status_err("Already at newest change");
         return;
     }
-    undo_push(&E.undo_stack, editor_capture_state());
-    editor_restore_state(&next);
-    undo_state_free(&next);
+    /* Save current buffer state into the current node before moving. */
+    undo_state_free(&E.undo_tree.current->state);
+    E.undo_tree.current->state = editor_capture_state();
+
+    UndoNode *next = undo_tree_redo(&E.undo_tree);
+    if (!next) {
+        status_err("Already at newest change");
+        return;
+    }
+    editor_restore_state(&next->state);
 }
 
 static void editor_process_normal(int c) {
@@ -4315,6 +4349,16 @@ static void editor_process_normal(int c) {
                 E.cy = E.buf.numrows - 1;
             s_vertical_move = 1;
             apply_preferred_col();
+        } else if (c == '-') {
+            /* g-: earlier state (chronological, crosses branches) */
+            int n = E.count > 0 ? E.count : 1;
+            E.count = 0;
+            for (int i = 0; i < n; i++) editor_earlier();
+        } else if (c == '+') {
+            /* g+: later state (chronological, crosses branches) */
+            int n = E.count > 0 ? E.count : 1;
+            E.count = 0;
+            for (int i = 0; i < n; i++) editor_later();
         }
         return;
     }
@@ -4686,7 +4730,7 @@ static void editor_process_normal(int c) {
                     int del = n;
                     if (E.cx + del > row->len) del = row->len - E.cx;
                     yank_set_chars(E.cy, E.cx, E.cx + del);
-                    push_undo();
+                    push_undo("delete char");
                     for (int i = 0; i < del; i++)
                         buf_row_delete_char(row, E.cx);
                     E.buf.dirty++;
@@ -4720,7 +4764,7 @@ static void editor_process_normal(int c) {
             if (E.cy < E.buf.numrows) {
                 Row *row = &E.buf.rows[E.cy];
                 if (E.cx < row->len) {
-                    push_undo();
+                    push_undo("replace");
                     for (int i = 0; i < n && E.cx + i < row->len; i++)
                         row->chars[E.cx + i] = (char)rk;
                     E.buf.dirty++;
@@ -4857,7 +4901,7 @@ static void editor_process_normal(int c) {
                     if (E.cy >= E.buf.numrows) break;
                     Row *row = &E.buf.rows[E.cy];
                     if (E.cx >= row->len) break;
-                    push_undo();
+                    push_undo("delete");
                     int del = use_n;
                     if (E.cx + del > row->len) del = row->len - E.cx;
                     for (int i = 0; i < del; i++)
@@ -4868,7 +4912,7 @@ static void editor_process_normal(int c) {
                     break;
                 }
                 case LA_INDENT:
-                    push_undo();
+                    push_undo("indent");
                     indent_lines(E.cy, E.cy + use_n - 1, (char)E.last_action.motion);
                     E.cx = 0;
                     break;
@@ -4876,7 +4920,7 @@ static void editor_process_normal(int c) {
                     if (E.cy >= E.buf.numrows) break;
                     Row *row = &E.buf.rows[E.cy];
                     if (E.cx >= row->len) break;
-                    push_undo();
+                    push_undo("replace");
                     char rch = (char)E.last_action.motion;
                     for (int i = 0; i < use_n && E.cx + i < row->len; i++)
                         row->chars[E.cx + i] = rch;
@@ -4896,12 +4940,11 @@ static void editor_process_normal(int c) {
                     E.mode = MODE_NORMAL;
                     if (E.has_pre_insert) {
                         if (E.buf.dirty != E.pre_insert_dirty)
-                            undo_push(&E.undo_stack, E.pre_insert_snapshot);
+                            undo_tree_push(&E.undo_tree, E.pre_insert_snapshot, "change");
                         else
                             undo_state_free(&E.pre_insert_snapshot);
                         E.has_pre_insert = 0;
                     }
-                    undo_stack_clear(&E.redo_stack);
                     break;
                 }
                 case LA_PASTE:
@@ -4909,7 +4952,7 @@ static void editor_process_normal(int c) {
                         editor_paste(E.last_action.before);
                     break;
                 case LA_INSERT: {
-                    push_undo();
+                    push_undo("insert");
                     char ent = E.last_action.entry;
                     if (ent == 'a' && E.cy < E.buf.numrows &&
                         E.cx < E.buf.rows[E.cy].len) E.cx++;
@@ -4921,7 +4964,7 @@ static void editor_process_normal(int c) {
                     break;
                 }
                 case LA_OPEN: {
-                    push_undo();
+                    push_undo("open line");
                     if (E.last_action.open_above) {
                         char ind[256]; int ind_len = 0;
                         if (E.opts.autoindent && E.cy < E.buf.numrows)
@@ -5160,8 +5203,7 @@ static void editor_process_insert(int c) {
             /* Push the pre-insert snapshot if anything changed. */
             if (E.has_pre_insert) {
                 if (E.buf.dirty != E.pre_insert_dirty) {
-                    undo_push(&E.undo_stack, E.pre_insert_snapshot);
-                    undo_stack_clear(&E.redo_stack);
+                    undo_tree_push(&E.undo_tree, E.pre_insert_snapshot, "insert");
                     /* Finalise last_action for . repeat. */
                     if (!E.is_replaying) {
                         la_free();
