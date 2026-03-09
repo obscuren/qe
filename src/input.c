@@ -3045,6 +3045,11 @@ static void qf_handle_key(int c) {
 
 /* ── Local revisions (undo tree browser) ─────────────────────────────── */
 
+/* Saved original state for preview — restored on close, discarded on Enter. */
+static UndoState rev_saved_state;
+static int       rev_saved_valid;
+static int       rev_saved_src_buf;  /* buftab index of the source buffer */
+
 static int rev_pane_idx(void) {
     for (int i = 0; i < E.num_panes; i++)
         if (E.buftabs[E.panes[i].buf_idx].is_revisions) return i;
@@ -3129,6 +3134,93 @@ static UndoNode *rev_node_at_row(UndoNode *n, int *row, int target) {
 
 static void rev_close_pane(void);
 
+/* Update the source content pane to preview a given undo node's state.
+   Also compute line-level diff against the saved original for coloring. */
+static void rev_update_preview(UndoNode *node) {
+    if (!node || !rev_saved_valid) return;
+
+    int src_buf = rev_saved_src_buf;
+    Buffer *buf = &E.buftabs[src_buf].buf;
+
+    /* Replace the parked buffer rows with the node's state. */
+    for (int i = 0; i < buf->numrows; i++) {
+        free(buf->rows[i].chars);
+        free(buf->rows[i].hl);
+    }
+    free(buf->rows);
+    buf->rows = NULL;
+    buf->numrows = 0;
+
+    for (int i = 0; i < node->state.numrows; i++) {
+        buf_insert_row(buf, i, node->state.row_chars[i], node->state.row_lens[i]);
+    }
+
+    /* Compute line-level diff signs against the saved original. */
+    free(buf->git_signs);
+    int nrows = buf->numrows;
+    buf->git_signs = malloc(nrows > 0 ? nrows : 1);
+    buf->git_signs_count = nrows;
+
+    UndoState *orig = &rev_saved_state;
+    for (int i = 0; i < nrows; i++) {
+        if (i >= orig->numrows) {
+            /* Line beyond original = added. */
+            buf->git_signs[i] = GIT_SIGN_ADD;
+        } else if (node->state.row_lens[i] != orig->row_lens[i] ||
+                   memcmp(node->state.row_chars[i], orig->row_chars[i],
+                          node->state.row_lens[i]) != 0) {
+            /* Line differs from original = modified. */
+            buf->git_signs[i] = GIT_SIGN_MOD;
+        } else {
+            buf->git_signs[i] = GIT_SIGN_NONE;
+        }
+    }
+    /* Mark a deletion indicator if the original had more lines. */
+    if (orig->numrows > nrows && nrows > 0) {
+        buf->git_signs[nrows - 1] = GIT_SIGN_DEL;
+    }
+
+    /* Force syntax re-highlight. */
+    buf->hl_dirty_from = 0;
+
+    /* Update the parked cursor to match the node's cursor position. */
+    E.buftabs[src_buf].cx = node->state.cx;
+    E.buftabs[src_buf].cy = node->state.cy;
+}
+
+/* Restore the source buffer from the saved original state. */
+static void rev_restore_original(void) {
+    if (!rev_saved_valid) return;
+
+    int src_buf = rev_saved_src_buf;
+    Buffer *buf = &E.buftabs[src_buf].buf;
+
+    /* Replace rows with original. */
+    for (int i = 0; i < buf->numrows; i++) {
+        free(buf->rows[i].chars);
+        free(buf->rows[i].hl);
+    }
+    free(buf->rows);
+    buf->rows = NULL;
+    buf->numrows = 0;
+
+    for (int i = 0; i < rev_saved_state.numrows; i++) {
+        buf_insert_row(buf, i, rev_saved_state.row_chars[i],
+                       rev_saved_state.row_lens[i]);
+    }
+
+    /* Restore cursor. */
+    E.buftabs[src_buf].cx = rev_saved_state.cx;
+    E.buftabs[src_buf].cy = rev_saved_state.cy;
+
+    /* Clear diff signs. */
+    free(buf->git_signs);
+    buf->git_signs = NULL;
+    buf->git_signs_count = 0;
+
+    buf->hl_dirty_from = 0;
+}
+
 static void rev_activate_entry(void) {
     int rpi = rev_pane_idx();
     if (rpi < 0) return;
@@ -3136,58 +3228,41 @@ static void rev_activate_entry(void) {
     BufTab *rbt = &E.buftabs[E.panes[rpi].buf_idx];
     int src_buf = rbt->rev_source_buf;
 
-    /* Find the undo tree (could be live or parked). */
-    UndoTree *tree = (src_buf == E.cur_buftab)
-                     ? &E.undo_tree
-                     : &E.buftabs[src_buf].undo_tree;
-
+    /* Find the undo tree for the source buffer (it's parked). */
+    UndoTree *tree = &E.buftabs[src_buf].undo_tree;
     if (!tree->root) return;
 
     int row = 0;
     UndoNode *target = rev_node_at_row(tree->root, &row, E.cy);
     if (!target) return;
 
-    /* Save current buffer state into the current node before switching. */
-    if (tree->current) {
-        /* If the source is the live buffer, capture from E.buf. */
-        if (src_buf == E.cur_buftab) {
-            /* We're in the revisions pane which is active — the source buf
-               is parked. We need to operate on the parked state. */
-        } else {
-            /* Source is parked already. */
-        }
+    /* Save the original state into its undo node before we accept. */
+    if (rev_saved_valid && tree->current) {
+        undo_state_free(&tree->current->state);
+        tree->current->state = rev_saved_state;
+        rev_saved_valid = 0;  /* consumed, don't free */
     }
 
-    /* Close the revisions pane first, which switches focus back to content. */
+    /* The preview is already showing this node's content in the parked buffer.
+       Just update the undo tree pointer and clear diff signs. */
+    tree->current = target;
+    Buffer *buf = &E.buftabs[src_buf].buf;
+    free(buf->git_signs);
+    buf->git_signs = NULL;
+    buf->git_signs_count = 0;
+    buf->dirty = 1;
+
+    /* Close the revisions pane (switches focus to content). */
     rev_close_pane();
-
-    /* Now the source buffer should be live (or we make it live). */
-    if (E.cur_buftab != src_buf) {
-        pane_save_cursor();
-        editor_buf_save(E.cur_buftab);
-        editor_buf_restore(src_buf);
-        E.cur_buftab = src_buf;
-    }
-
-    /* Save current state into the current undo node. */
-    if (E.undo_tree.current) {
-        undo_state_free(&E.undo_tree.current->state);
-        E.undo_tree.current->state = editor_capture_state();
-    }
-
-    /* Switch to the target node. */
-    E.undo_tree.current = target;
-    editor_restore_state(&target->state);
 }
 
 static void rev_close_pane(void) {
     int rpi = rev_pane_idx();
     if (rpi < 0) return;
 
-    int rf_top    = E.panes[rpi].top;
-    int rf_h      = E.panes[rpi].height;
-    int buf_idx   = E.panes[rpi].buf_idx;
+    int buf_idx    = E.panes[rpi].buf_idx;
     int rev_active = (E.cur_pane == rpi);
+    int rev_right  = E.panes[rpi].left + E.panes[rpi].width + 1;
 
     /* Find content pane to return to. */
     int cpane = E.last_content_pane;
@@ -3201,12 +3276,20 @@ static void rev_close_pane(void) {
         }
     }
 
-    /* Expand panes above the revisions pane. */
+    /* Restore the original buffer content if we're closing without accepting. */
+    if (rev_saved_valid) {
+        rev_restore_original();
+        undo_state_free(&rev_saved_state);
+        rev_saved_valid = 0;
+    }
+
+    /* Expand panes immediately right of the revisions pane to reclaim width. */
     for (int i = 0; i < E.num_panes; i++) {
         if (i == rpi) continue;
-        Pane *p = &E.panes[i];
-        if (p->top + p->height + 1 == rf_top)
-            p->height += rf_h + 1;
+        if (E.panes[i].left == rev_right) {
+            E.panes[i].left  = E.panes[rpi].left;
+            E.panes[i].width += E.panes[rpi].width + 1;
+        }
     }
 
     /* Free the revisions buffer. */
@@ -3249,6 +3332,8 @@ static void rev_close_pane(void) {
     E.match_bracket_valid = 0;
 }
 
+#define REV_WIDTH 40
+
 static void rev_open_pane(void) {
     /* Close existing revisions pane if open (toggle). */
     if (rev_pane_idx() >= 0) { rev_close_pane(); return; }
@@ -3270,79 +3355,91 @@ static void rev_open_pane(void) {
         E.undo_tree.current->state = editor_capture_state();
     }
 
-    int rh = E.opts.qf_height_rows > 0 ? E.opts.qf_height_rows : 8;
-    if (rh > E.term_rows / 2) rh = E.term_rows / 2;
-    int rev_top = E.term_rows - 1 - rh;
+    /* Save the original state for preview revert on close. */
+    rev_saved_state   = editor_capture_state();
+    rev_saved_valid   = 1;
+    rev_saved_src_buf = src_buf;
 
-    /* Shrink content panes to make room. */
+    /* Verify panes will still have enough width. */
+    int rev_zone = REV_WIDTH + 2;  /* pane + separator col */
     for (int i = 0; i < E.num_panes; i++) {
-        Pane *p = &E.panes[i];
-        if (p->top + p->height >= rev_top) {
-            int new_h = rev_top - 1 - p->top;
-            if (new_h < 2) { status_err("Not enough space for revisions"); return; }
-            p->height = new_h;
+        if (E.panes[i].left < rev_zone) {
+            int new_width = E.panes[i].width - (rev_zone - E.panes[i].left);
+            if (new_width < 5) { status_err("Pane too narrow for revisions"); return; }
         }
     }
 
-    if (!buftab_is_special(&E.buftabs[E.panes[E.cur_pane].buf_idx]))
-        E.last_content_pane = E.cur_pane;
+    int cp_idx = E.cur_pane;
+    if (!buftab_is_special(&E.buftabs[E.panes[cp_idx].buf_idx]))
+        E.last_content_pane = cp_idx;
 
     /* Allocate buftab for revisions buffer. */
     int ridx = E.num_buftabs++;
     memset(&E.buftabs[ridx], 0, sizeof(BufTab));
-    E.buftabs[ridx].is_revisions  = 1;
+    E.buftabs[ridx].is_revisions   = 1;
     E.buftabs[ridx].rev_source_buf = src_buf;
 
     buf_init(&E.buftabs[ridx].buf);
     rev_render_to_buf(&E.undo_tree, &E.buftabs[ridx].buf, E.undo_tree.current);
 
-    /* Append revisions pane at the bottom. */
-    int rpi = E.num_panes++;
-    E.panes[rpi].top     = rev_top;
-    E.panes[rpi].left    = 1;
-    E.panes[rpi].height  = rh;
-    E.panes[rpi].width   = E.term_cols;
-    E.panes[rpi].buf_idx = ridx;
-    E.panes[rpi].cx = E.panes[rpi].cy = 0;
-    E.panes[rpi].rowoff = E.panes[rpi].coloff = 0;
+    /* Save current live content buffer. */
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+    la_free();
+    insert_rec_reset();
+    completion_free();
+    E.pending_op = '\0';
+    E.count      = 0;
 
-    /* Find the row index of the current undo node so we can position cursor there. */
-    if (E.undo_tree.root && E.undo_tree.current) {
-        UndoNode **arr = NULL;
-        int count = undo_tree_flatten(&E.undo_tree, &arr);
-        for (int i = 0; i < count; i++) {
-            if (arr[i] == E.undo_tree.current) {
-                /* DFS order row: we need to walk the tree instead. */
-                break;
-            }
+    /* Push all panes that overlap the revisions zone to the right. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (E.panes[i].left < rev_zone) {
+            int shift = rev_zone - E.panes[i].left;
+            E.panes[i].width -= shift;
+            E.panes[i].left   = rev_zone;
         }
-        if (arr) free(arr);
+    }
 
-        /* Walk in DFS order to find current node's row. */
+    /* Insert revisions pane at index 0 (shift all others). */
+    for (int i = E.num_panes; i > 0; i--) E.panes[i] = E.panes[i-1];
+    E.num_panes++;
+    E.last_content_pane = cp_idx + 1;  /* shifted by insertion */
+
+    /* Revisions pane: far left, full terminal height. */
+    E.panes[0].top     = 1;
+    E.panes[0].left    = 1;
+    E.panes[0].height  = E.term_rows - 2;
+    E.panes[0].width   = REV_WIDTH;
+    E.panes[0].buf_idx = ridx;
+    E.panes[0].cx      = 0;
+    E.panes[0].cy      = 0;
+    E.panes[0].rowoff  = 0;
+    E.panes[0].coloff  = 0;
+
+    /* Find the row of the current undo node to position cursor there. */
+    int rh = E.term_rows - 2;
+    if (E.undo_tree.root && E.undo_tree.current) {
         int row = 0;
         for (int r = 0; r < E.buftabs[ridx].buf.numrows; r++) {
             UndoNode *n = rev_node_at_row(E.undo_tree.root, &row, r);
             if (n == E.undo_tree.current) {
-                E.panes[rpi].cy = r;
-                /* Scroll so current is visible. */
-                if (r >= rh) E.panes[rpi].rowoff = r - rh / 2;
+                E.panes[0].cy = r;
+                if (r >= rh) E.panes[0].rowoff = r - rh / 2;
                 break;
             }
-            row = 0;  /* reset for next iteration */
+            row = 0;
         }
     }
 
     /* Activate revisions pane. */
-    pane_save_cursor();
-    editor_buf_save(E.cur_buftab);
-    E.cur_pane   = rpi;
+    E.cur_pane   = 0;
     E.cur_buftab = ridx;
-    E.cx = 0;
-    E.cy = E.panes[rpi].cy;
-    E.rowoff = E.panes[rpi].rowoff;
-    E.coloff = 0;
     E.screenrows = rh;
-    E.screencols = E.term_cols;
+    E.screencols = REV_WIDTH;
+    E.cx = 0;
+    E.cy = E.panes[0].cy;
+    E.rowoff = E.panes[0].rowoff;
+    E.coloff = 0;
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
     editor_buf_restore(ridx);
@@ -3354,20 +3451,36 @@ static void rev_handle_key(int c) {
 
     if (c == 'q' || c == '\x1b') { rev_close_pane(); return; }
 
+    int moved = 0;
     if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
         E.cy++;
         if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+        moved = 1;
     } else if ((c == ARROW_UP || c == 'k') && E.cy > 0) {
         E.cy--;
         if (E.cy < E.rowoff) E.rowoff = E.cy;
+        moved = 1;
     } else if (c == 'G') {
         E.cy = E.buf.numrows - 1;
         if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+        moved = 1;
     } else if (c == 'g') {
-        /* gg = go to top (simple: next g press goes to top) */
         E.cy = 0; E.rowoff = 0;
+        moved = 1;
     } else if (c == '\r') {
         rev_activate_entry();
+        return;
+    }
+
+    /* Update preview in content pane after cursor movement. */
+    if (moved && rev_saved_valid) {
+        BufTab *rbt = &E.buftabs[E.panes[rpi].buf_idx];
+        UndoTree *tree = &E.buftabs[rbt->rev_source_buf].undo_tree;
+        if (tree->root) {
+            int row = 0;
+            UndoNode *node = rev_node_at_row(tree->root, &row, E.cy);
+            if (node) rev_update_preview(node);
+        }
     }
 }
 
