@@ -5244,6 +5244,28 @@ static void editor_process_insert(int c) {
             break;
         }
 
+        case ARROW_LEFT:
+            if (E.cx > 0) E.cx--;
+            break;
+        case ARROW_RIGHT:
+            if (E.cy < E.buf.numrows && E.cx < E.buf.rows[E.cy].len)
+                E.cx++;
+            break;
+        case ARROW_UP:
+            if (E.cy > 0) {
+                E.cy--;
+                int rowlen = (E.cy < E.buf.numrows) ? E.buf.rows[E.cy].len : 0;
+                if (E.cx > rowlen) E.cx = rowlen;
+            }
+            break;
+        case ARROW_DOWN:
+            if (E.cy < E.buf.numrows - 1) {
+                E.cy++;
+                int rowlen = (E.cy < E.buf.numrows) ? E.buf.rows[E.cy].len : 0;
+                if (E.cx > rowlen) E.cx = rowlen;
+            }
+            break;
+
         default:
             if (c >= 32 && c < 127) {
                 if (E.opts.autoindent && is_close_bracket((char)c))
