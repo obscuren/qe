@@ -209,6 +209,14 @@ int cli_dispatch(int argc, char **argv, int *out_line, int *out_readonly) {
         }
     }
 
+    /* --version / -v */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+            printf("Quick Editor %s\n", QE_VERSION);
+            return 0;
+        }
+    }
+
     /* Need at least a subcommand argument. */
     if (argc < 2) return -1;
     const char *cmd = argv[1];

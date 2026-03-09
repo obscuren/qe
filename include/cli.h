@@ -2,6 +2,8 @@
 #ifndef CLI_H
 #define CLI_H
 
+#define QE_VERSION "0.1.0"
+
 /* Try to dispatch argv as a CLI subcommand.
    Returns:  exit code >= 0 if a command was handled (caller should exit),
             -1 if no subcommand matched (caller should start the editor).
