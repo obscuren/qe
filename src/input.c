@@ -994,6 +994,29 @@ static void editor_apply_op(char op, int motion_key, int n) {
                 case 'b': pos_word_start(&tr, &tc); break;
                 case '0': tr = E.cy; tc = 0; i = n; break;
                 case '$': tr = E.cy; tc = E.buf.rows[E.cy].len; i = n; break;
+                case '_': case '^': {
+                    int col = 0;
+                    Row *row = &E.buf.rows[tr];
+                    while (col < row->len && (row->chars[col] == ' ' || row->chars[col] == '\t'))
+                        col++;
+                    tc = col; i = n;
+                    break;
+                }
+                case '{': {
+                    int r = tr - 1;
+                    while (r > 0 && E.buf.rows[r].len == 0) r--;
+                    while (r > 0 && E.buf.rows[r].len > 0) r--;
+                    tr = r; tc = 0;
+                    break;
+                }
+                case '}': {
+                    int last = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+                    int r = tr + 1;
+                    while (r < last && E.buf.rows[r].len == 0) r++;
+                    while (r < last && E.buf.rows[r].len > 0) r++;
+                    tr = r; tc = 0;
+                    break;
+                }
                 default:  return;
             }
         }
@@ -4663,6 +4686,112 @@ static void editor_process_normal(int c) {
             case 'c': case 'q':
                 pane_close(E.cur_pane);
                 break;
+            case '+': case '-': {
+                /* Vertical resize: change height of horizontal splits. */
+                Pane *cur = &E.panes[E.cur_pane];
+                int delta = (c == '+') ? 1 : -1;
+                int n = E.count > 0 ? E.count : 1;
+                E.count = 0;
+                delta *= n;
+                /* Find a neighbor pane above or below to steal/give rows. */
+                int neighbor = -1;
+                for (int i = 0; i < E.num_panes; i++) {
+                    if (i == E.cur_pane) continue;
+                    Pane *np = &E.panes[i];
+                    /* Same column range and vertically adjacent? */
+                    if (np->left == cur->left && np->width == cur->width) {
+                        if (np->top + np->height + 1 == cur->top ||
+                            cur->top + cur->height + 1 == np->top) {
+                            neighbor = i; break;
+                        }
+                    }
+                }
+                if (neighbor >= 0) {
+                    Pane *np = &E.panes[neighbor];
+                    if (cur->height + delta >= 2 && np->height - delta >= 2) {
+                        cur->height += delta;
+                        np->height -= delta;
+                        if (np->top > cur->top)
+                            np->top += delta;
+                        else
+                            cur->top -= delta;
+                        E.screenrows = cur->height;
+                    }
+                }
+                break;
+            }
+            case '<': case '>': {
+                /* Horizontal resize: change width of vertical splits. */
+                Pane *cur = &E.panes[E.cur_pane];
+                int delta = (c == '>') ? 1 : -1;
+                int n = E.count > 0 ? E.count : 1;
+                E.count = 0;
+                delta *= n;
+                int neighbor = -1;
+                for (int i = 0; i < E.num_panes; i++) {
+                    if (i == E.cur_pane) continue;
+                    Pane *np = &E.panes[i];
+                    if (np->top == cur->top && np->height == cur->height) {
+                        if (np->left + np->width + 1 == cur->left ||
+                            cur->left + cur->width + 1 == np->left) {
+                            neighbor = i; break;
+                        }
+                    }
+                }
+                if (neighbor >= 0) {
+                    Pane *np = &E.panes[neighbor];
+                    if (cur->width + delta >= 5 && np->width - delta >= 5) {
+                        cur->width += delta;
+                        np->width -= delta;
+                        if (np->left > cur->left)
+                            np->left += delta;
+                        else
+                            cur->left -= delta;
+                        E.screencols = cur->width;
+                    }
+                }
+                break;
+            }
+            case '=': {
+                /* Equalize pane sizes. */
+                E.count = 0;
+                /* Equalize widths of panes at the same vertical level. */
+                int total_w = 0, count_h = 0;
+                Pane *cur = &E.panes[E.cur_pane];
+                for (int i = 0; i < E.num_panes; i++) {
+                    Pane *p = &E.panes[i];
+                    if (p->top == cur->top && p->height == cur->height) {
+                        total_w += p->width + 1;
+                        count_h++;
+                    }
+                }
+                if (count_h > 1) {
+                    total_w--;  /* last pane has no separator */
+                    int each = total_w / count_h;
+                    int left = cur->left;
+                    /* Find leftmost pane in this row. */
+                    for (int i = 0; i < E.num_panes; i++) {
+                        Pane *p = &E.panes[i];
+                        if (p->top == cur->top && p->height == cur->height)
+                            if (p->left < left) left = p->left;
+                    }
+                    int col = left;
+                    int assigned = 0;
+                    for (int i = 0; i < E.num_panes; i++) {
+                        Pane *p = &E.panes[i];
+                        if (p->top != cur->top || p->height != cur->height) continue;
+                        p->left = col;
+                        assigned++;
+                        if (assigned == count_h)
+                            p->width = total_w - (col - left);
+                        else
+                            p->width = each;
+                        col += p->width + 1;
+                    }
+                    E.screencols = E.panes[E.cur_pane].width;
+                }
+                break;
+            }
             default:
                 status_err("Unknown Ctrl-W command");
                 break;
@@ -4683,6 +4812,48 @@ static void editor_process_normal(int c) {
                 E.cy = E.buf.numrows - 1;
             s_vertical_move = 1;
             apply_preferred_col();
+        } else if (c == 'd') {
+            /* gd: go to local definition — search for word under cursor from top. */
+            if (E.cy < E.buf.numrows && E.buf.numrows > 0) {
+                Row *row = &E.buf.rows[E.cy];
+                int start = E.cx, end = E.cx;
+                if (start < row->len) {
+                    /* Expand word boundaries. */
+                    while (start > 0 && (isalnum((unsigned char)row->chars[start-1]) || row->chars[start-1] == '_'))
+                        start--;
+                    while (end < row->len && (isalnum((unsigned char)row->chars[end]) || row->chars[end] == '_'))
+                        end++;
+                    if (end > start) {
+                        int wlen = end - start;
+                        char word[256];
+                        if (wlen > 255) wlen = 255;
+                        memcpy(word, row->chars + start, wlen);
+                        word[wlen] = '\0';
+                        /* Search from line 0 for first occurrence. */
+                        for (int r = 0; r < E.buf.numrows; r++) {
+                            Row *sr = &E.buf.rows[r];
+                            char *p = sr->chars;
+                            while ((p = strstr(p, word)) != NULL) {
+                                int col = (int)(p - sr->chars);
+                                /* Ensure it's a whole word match. */
+                                int before_ok = (col == 0 || (!isalnum((unsigned char)p[-1]) && p[-1] != '_'));
+                                int after_ok = (col + wlen >= sr->len || (!isalnum((unsigned char)p[wlen]) && p[wlen] != '_'));
+                                if (before_ok && after_ok && !(r == E.cy && col == start)) {
+                                    jump_push();
+                                    E.cy = r;
+                                    E.cx = col;
+                                    goto gd_done;
+                                }
+                                p++;
+                            }
+                        }
+                        snprintf(E.statusmsg, sizeof(E.statusmsg), "Definition not found: %s", word);
+                        E.statusmsg_is_error = 1;
+                        gd_done: ;
+                    }
+                }
+            }
+            E.count = 0;
         } else if (c == '-') {
             /* g-: earlier state (chronological, crosses branches) */
             int n = E.count > 0 ? E.count : 1;
@@ -5433,6 +5604,53 @@ static void editor_process_normal(int c) {
                 E.cx = len > 0 ? len - 1 : 0;
             }
             break;
+
+        case '_':
+        case '^':
+            /* First non-blank character on the line. */
+            if (E.cy < E.buf.numrows) {
+                Row *row = &E.buf.rows[E.cy];
+                int col = 0;
+                while (col < row->len && (row->chars[col] == ' ' || row->chars[col] == '\t'))
+                    col++;
+                E.cx = col < row->len ? col : (row->len > 0 ? row->len - 1 : 0);
+            }
+            break;
+
+        case '{': {
+            /* Move to previous blank line (paragraph boundary). */
+            int n = E.count > 0 ? E.count : 1;
+            E.count = 0;
+            for (int i = 0; i < n; i++) {
+                int r = E.cy - 1;
+                /* Skip current blank lines. */
+                while (r > 0 && E.buf.rows[r].len == 0) r--;
+                /* Find next blank line. */
+                while (r > 0 && E.buf.rows[r].len > 0) r--;
+                E.cy = r;
+            }
+            E.cx = 0;
+            s_vertical_move = 1;
+            break;
+        }
+
+        case '}': {
+            /* Move to next blank line (paragraph boundary). */
+            int n = E.count > 0 ? E.count : 1;
+            E.count = 0;
+            int last = E.buf.numrows > 0 ? E.buf.numrows - 1 : 0;
+            for (int i = 0; i < n; i++) {
+                int r = E.cy + 1;
+                /* Skip current blank lines. */
+                while (r < last && E.buf.rows[r].len == 0) r++;
+                /* Find next blank line. */
+                while (r < last && E.buf.rows[r].len > 0) r++;
+                E.cy = r;
+            }
+            E.cx = 0;
+            s_vertical_move = 1;
+            break;
+        }
 
         /* --- G: nG = go to line n, G = last line --- */
         case 'G':
