@@ -19,6 +19,7 @@ add_executable(test_undo
     ${CMAKE_SOURCE_DIR}/src/utils.c
 )
 target_include_directories(test_undo PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_undo PRIVATE QE_TEST)
 target_link_libraries(test_undo PRIVATE unity)
 add_test(NAME undo COMMAND test_undo)
 

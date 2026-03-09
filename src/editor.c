@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "editor.h"
 #include "git.h"
+#include "input.h"
 #include "terminal.h"
+#include "term_emu.h"
 #include "utils.h"
 
 #include <limits.h>
+#include <poll.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 EditorConfig E;
 
@@ -205,6 +211,80 @@ void editor_buf_restore(int i) {
 
     E.syntax = t->syntax;
 }
+
+/* ── Main loop helpers ────────────────────────────────────────────── */
+#ifndef QE_TEST
+
+const char *editor_find_file_arg(int argc, char *argv[]) {
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '+' || strcmp(argv[i], "-R") == 0) continue;
+        return argv[i];
+    }
+    return NULL;
+}
+
+void editor_open_file_arg(const char *file_arg) {
+    struct stat st;
+    if (stat(file_arg, &st) == 0 && S_ISDIR(st.st_mode)) {
+        if (chdir(file_arg) == 0)
+            editor_open_tree();
+    } else {
+        buf_open(&E.buf, file_arg);
+        editor_detect_syntax();
+    }
+}
+
+void editor_handle_resize(void) {
+    int nr, nc;
+    if (term_get_size(&nr, &nc) != 0) return;
+    E.term_rows = nr; E.term_cols = nc;
+    E.num_panes = 1; E.cur_pane = 0;
+    E.panes[0].top    = 1;
+    E.panes[0].left   = 1;
+    E.panes[0].height = nr - 2;
+    E.panes[0].width  = nc;
+    E.screenrows      = nr - 2;
+    E.screencols      = nc;
+}
+
+void editor_drain_terminals(void) {
+    for (int i = 0; i < E.num_buftabs; i++) {
+        if (!E.buftabs[i].is_term || !E.buftabs[i].term) continue;
+        TermState *ts = E.buftabs[i].term;
+        for (int pi = 0; pi < E.num_panes; pi++) {
+            if (E.panes[pi].buf_idx == i) {
+                Pane *p = &E.panes[pi];
+                if (ts->rows != p->height || ts->cols != p->width)
+                    term_emu_resize(ts, p->height, p->width);
+                break;
+            }
+        }
+        term_emu_read(ts);
+    }
+}
+
+int editor_poll_for_input(void) {
+    struct pollfd pfds[1 + MAX_BUFS];
+    int nfds = 0;
+    pfds[nfds++] = (struct pollfd){ .fd = STDIN_FILENO, .events = POLLIN };
+    for (int i = 0; i < E.num_buftabs; i++) {
+        if (E.buftabs[i].is_term && E.buftabs[i].term
+            && E.buftabs[i].term->pty_fd >= 0)
+            pfds[nfds++] = (struct pollfd){
+                .fd = E.buftabs[i].term->pty_fd, .events = POLLIN };
+    }
+
+    int pr = poll(pfds, nfds, -1);
+    if (pr <= 0) return 0;
+
+    if (pfds[0].revents & POLLIN)
+        editor_process_keypress();
+    return 1;
+}
+
+#endif /* QE_TEST */
+
+/* ── Undo state ──────────────────────────────────────────────────── */
 
 void editor_restore_state(const UndoState *s) {
     for (int i = 0; i < E.buf.numrows; i++)

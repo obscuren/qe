@@ -237,6 +237,13 @@ void editor_init(void);
 void editor_detect_syntax(void);
 void editor_update_git_signs(void);
 
+/* Main loop helpers (defined in editor.c). */
+void editor_handle_resize(void);
+void editor_drain_terminals(void);
+int  editor_poll_for_input(void);
+const char *editor_find_file_arg(int argc, char *argv[]);
+void editor_open_file_arg(const char *file_arg);
+
 UndoState editor_capture_state(void);
 void      editor_restore_state(const UndoState *s);
 
