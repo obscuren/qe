@@ -25,11 +25,14 @@ int main(int argc, char *argv[]) {
 
     term_enable_raw_mode();
     signal(SIGWINCH, handle_sigwinch);
+    editor_watch_init();
     E.readonly = readonly;
 
     const char *file_arg = editor_find_file_arg(argc, argv);
-    if (file_arg)
+    if (file_arg) {
         editor_open_file_arg(file_arg);
+        editor_watch_add(E.cur_buftab);
+    }
 
     if (start_line > 0 && E.buf.numrows > 0) {
         E.cy = start_line - 1;

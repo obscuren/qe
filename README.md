@@ -2,6 +2,8 @@
 
 A fast, lightweight terminal text editor with modal editing, syntax highlighting, and Lua-based configuration.
 
+Please note that this is a research project. Quick Ed has been entirely built based on prompting.
+
 ---
 
 ## Installation

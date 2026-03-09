@@ -1743,6 +1743,7 @@ static void tree_activate_entry(void) {
             buf_open(&E.buf, fname);
             editor_detect_syntax();
             editor_update_git_signs();
+            editor_watch_add(E.cur_buftab);
             status_msg("\"%s\"", E.buf.filename ? E.buf.filename : fname);
         }
         free(fname);
@@ -3162,12 +3163,14 @@ static int open_new_buf(const char *filename) {
     }
     int idx = E.num_buftabs++;
     memset(&E.buftabs[idx], 0, sizeof(BufTab));
+    E.buftabs[idx].watch_wd = -1;
     switch_to_buf(idx);   /* saves current, clears transient, activates new slot */
     buf_init(&E.buf);
     if (filename) {
         buf_open(&E.buf, filename);
         editor_detect_syntax();
         editor_update_git_signs();
+        editor_watch_add(E.cur_buftab);
         status_msg("\"%s\"", E.buf.filename ? E.buf.filename : filename);
     }
     return 1;
@@ -3391,6 +3394,7 @@ static void editor_load_session(const char *path) {
                     buf_free(&E.buf);
                     buf_open(&E.buf, fname);
                     editor_detect_syntax();
+                    editor_watch_add(E.cur_buftab);
                     E.cy = cy; E.cx = cx;
                     if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
                         E.cy = E.buf.numrows - 1;
@@ -3642,6 +3646,9 @@ void editor_execute_command(void) {
                         } else if (buf_save(&E.buf) != 0) {
                             status_err("Cannot write \"%s\"", E.buf.filename);
                             errs++;
+                        } else {
+                            E.buftabs[E.cur_buftab].watch_skip++;
+                            editor_watch_add(E.cur_buftab);
                         }
                     }
                     for (int i = 0; i < E.num_buftabs; i++) {
@@ -3654,6 +3661,9 @@ void editor_execute_command(void) {
                             } else if (buf_save(b) != 0) {
                                 status_err("Cannot write \"%s\"", b->filename);
                                 errs++;
+                            } else {
+                                E.buftabs[i].watch_skip++;
+                                editor_watch_add(i);
                             }
                         }
                     }
@@ -3676,6 +3686,8 @@ void editor_execute_command(void) {
                     }
                     if (buf_save(&E.buf) == 0) {
                         editor_update_git_signs();
+                        E.buftabs[E.cur_buftab].watch_skip++;
+                        editor_watch_add(E.cur_buftab);
                         if (!dq) status_msg("\"%s\" written", E.buf.filename);
                     } else {
                         status_err("Cannot write \"%s\"", E.buf.filename);
@@ -4063,6 +4075,7 @@ void editor_execute_command(void) {
             buf_open(&E.buf, fname);
             editor_detect_syntax();
             editor_update_git_signs();
+            editor_watch_add(E.cur_buftab);
             status_msg("\"%s\"", E.buf.filename);
         }
         free(fname);
@@ -5661,6 +5674,26 @@ static void macro_play(int ri, int count) {
 
 void editor_process_keypress(void) {
     int c = editor_read_key();
+
+    /* File-changed prompt: intercept the next key. */
+    if (E.watch_prompt_buf >= 0) {
+        int bidx = E.watch_prompt_buf;
+        E.watch_prompt_buf = -1;
+        E.statusmsg[0] = '\0';
+        E.statusmsg_is_error = 0;
+
+        if (c == 'L' || c == 'l') {
+            editor_reload_buf(bidx);
+            const char *fname = (bidx == E.cur_buftab) ? E.buf.filename
+                                                        : E.buftabs[bidx].buf.filename;
+            const char *base = fname ? strrchr(fname, '/') : NULL;
+            base = base ? base + 1 : fname;
+            snprintf(E.statusmsg, sizeof(E.statusmsg),
+                     "\"%s\" reloaded", base ? base : "");
+        }
+        /* O, Escape, Enter, or anything else = keep local version */
+        return;
+    }
 
     /* Mouse events are handled in all modes. */
     if (c == MOUSE_PRESS) {

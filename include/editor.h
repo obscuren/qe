@@ -53,6 +53,9 @@ typedef struct {
     int         log_count;
     int        is_term;   /* 1 = this slot holds an embedded terminal       */
     TermState *term;      /* non-NULL when is_term == 1                     */
+    int        watch_wd;       /* inotify watch descriptor, -1 = none       */
+    int        file_changed;  /* 1 = external modification detected        */
+    int        watch_skip;    /* >0 = ignore next N modify events (our save) */
 } BufTab;
 
 /* True for any non-content buffer (tree, quickfix, git viewers, terminal…).
@@ -229,6 +232,10 @@ typedef struct {
     char git_branch[64];    /* current branch name (empty if not a git repo) */
     int  pending_bracket;   /* ']' or '[' waiting for second key, 0 = none  */
     int  pending_leader_h;  /* 1 = <leader>h pressed, waiting for s/r       */
+
+    /* File watching (inotify) */
+    int  inotify_fd;        /* inotify file descriptor, -1 = disabled       */
+    int  watch_prompt_buf;  /* buftab idx awaiting reload confirm, -1=none  */
 } EditorConfig;
 
 extern EditorConfig E;
@@ -249,5 +256,12 @@ void      editor_restore_state(const UndoState *s);
 
 void editor_buf_save(int i);
 void editor_buf_restore(int i);
+
+/* File watching (inotify). */
+void editor_watch_init(void);
+void editor_watch_add(int buftab_idx);
+void editor_watch_remove(int buftab_idx);
+void editor_watch_drain(void);
+void editor_reload_buf(int buftab_idx);
 
 #endif
