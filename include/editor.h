@@ -52,6 +52,8 @@ typedef struct {
     int         log_count;
     int        is_term;   /* 1 = this slot holds an embedded terminal       */
     TermState *term;      /* non-NULL when is_term == 1                     */
+    int        is_revisions; /* 1 = this slot holds the local revisions browser */
+    int        rev_source_buf; /* buf_idx of the file whose undo tree we show  */
     int        watch_wd;       /* inotify watch descriptor, -1 = none       */
     int        file_changed;  /* 1 = external modification detected        */
     int        watch_skip;    /* >0 = ignore next N modify events (our save) */
@@ -61,7 +63,8 @@ typedef struct {
    Use this to skip special buffers in :ls, :bn/:bp, fuzzy picker, dirty checks, etc. */
 static inline int buftab_is_special(const BufTab *bt) {
     return bt->is_tree || bt->is_qf || bt->is_blame || bt->is_diff
-        || bt->is_commit || bt->is_show || bt->is_log || bt->is_term;
+        || bt->is_commit || bt->is_show || bt->is_log || bt->is_term
+        || bt->is_revisions;
 }
 
 typedef enum {

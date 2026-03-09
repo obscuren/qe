@@ -443,7 +443,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int is_commit    = E.buftabs[p->buf_idx].is_commit;
     int is_log       = E.buftabs[p->buf_idx].is_log;
     int is_show      = E.buftabs[p->buf_idx].is_show;
-    int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log || is_show;
+    int is_rev       = E.buftabs[p->buf_idx].is_revisions;
+    int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log || is_show || is_rev;
     int gw           = no_gutter ? 0 : gutter_width_for(buf, p->buf_idx);
     int has_marks    = no_gutter ? 0 : buf_has_marks(p->buf_idx);
     int content_cols = p->width - gw;
@@ -585,6 +586,35 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 ab_append(ab, "\x1b[33m", 5);      /* yellow */
             else if (gs == 'D')
                 ab_append(ab, "\x1b[31m", 5);      /* red */
+
+            ab_append(ab, row->chars, rlen);
+            ab_append(ab, "\x1b[m", 3);
+            fr++;
+            continue;
+        }
+
+        /* Revisions pane: tree structure in dim, current node highlighted. */
+        if (is_rev && filerow < buf->numrows) {
+            Row *row = &buf->rows[filerow];
+            int avail = p->width;
+            int rlen = row->len < avail ? row->len : avail;
+            int is_sel = (filerow == pcy);
+            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+
+            /* Check if this row contains the current marker (◀). */
+            int is_current = 0;
+            for (int ci = 0; ci + 2 < rlen; ci++) {
+                if ((unsigned char)row->chars[ci] == 0xe2 &&
+                    (unsigned char)row->chars[ci+1] == 0x97 &&
+                    (unsigned char)row->chars[ci+2] == 0x80) {
+                    is_current = 1; break;
+                }
+            }
+
+            if (is_current && !is_sel)
+                ab_append(ab, "\x1b[1;33m", 6);    /* bold yellow for current */
+            else if (!is_sel)
+                ab_append(ab, "\x1b[36m", 5);      /* cyan for tree lines */
 
             ab_append(ab, row->chars, rlen);
             ab_append(ab, "\x1b[m", 3);
@@ -1022,6 +1052,24 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         ab_append(ab, erase, elen);
         char left[32], right[16];
         int llen = snprintf(left,  sizeof(left),  " [Tree]");
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        if (llen > p->width) llen = p->width;
+        ab_append(ab, left, llen);
+        int gap = p->width - llen - rlen;
+        while (gap-- > 0) ab_append(ab, " ", 1);
+        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
+        ab_append(ab, "\x1b[m", 3);
+        return;
+    }
+
+    /* Revisions pane: compact status bar. */
+    if (E.buftabs[p->buf_idx].is_revisions) {
+        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+        char erase[16];
+        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+        ab_append(ab, erase, elen);
+        char left[64], right[16];
+        int llen = snprintf(left,  sizeof(left),  " [Local Revisions]");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
         if (llen > p->width) llen = p->width;
         ab_append(ab, left, llen);

@@ -3020,6 +3020,334 @@ static void qf_handle_key(int c) {
     }
 }
 
+/* ── Local revisions (undo tree browser) ─────────────────────────────── */
+
+static int rev_pane_idx(void) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].is_revisions) return i;
+    return -1;
+}
+
+/* Render the undo tree into buffer rows for display.
+   Format: indented tree with markers for current node and branch points.
+   Example:
+     ● initial                 [root]
+     ├─ insert                 seq 1
+     │  └─ delete              seq 3
+     └─ insert                 seq 2  ◀
+*/
+static void rev_render_node(UndoNode *n, Buffer *buf, UndoNode *current,
+                            const char *prefix, int is_last, int is_root) {
+    char line[256];
+    int pos = 0;
+
+    if (is_root) {
+        pos += snprintf(line + pos, sizeof(line) - pos, "● %s", n->desc[0] ? n->desc : "(root)");
+    } else {
+        pos += snprintf(line + pos, sizeof(line) - pos, "%s", prefix);
+        pos += snprintf(line + pos, sizeof(line) - pos, "%s ", is_last ? "└─" : "├─");
+        pos += snprintf(line + pos, sizeof(line) - pos, "%s", n->desc[0] ? n->desc : "(edit)");
+    }
+
+    /* Mark current node. */
+    if (n == current)
+        pos += snprintf(line + pos, sizeof(line) - pos, "  ◀");
+
+    /* Lines/cursor info. */
+    pos += snprintf(line + pos, sizeof(line) - pos, "  (%d lines, %d:%d)",
+                    n->state.numrows, n->state.cy + 1, n->state.cx);
+
+    buf_insert_row(buf, buf->numrows, line, pos);
+
+    /* Build child prefix. */
+    char child_prefix[128];
+    if (is_root) {
+        child_prefix[0] = '\0';
+    } else {
+        snprintf(child_prefix, sizeof(child_prefix), "%s%s", prefix,
+                 is_last ? "   " : "│  ");
+    }
+
+    for (int i = 0; i < n->num_children; i++) {
+        rev_render_node(n->children[i], buf, current, child_prefix,
+                        i == n->num_children - 1, 0);
+    }
+}
+
+static void rev_render_to_buf(const UndoTree *tree, Buffer *buf, UndoNode *current) {
+    /* Clear existing rows. */
+    for (int i = 0; i < buf->numrows; i++) {
+        free(buf->rows[i].chars);
+        free(buf->rows[i].hl);
+    }
+    free(buf->rows);
+    buf->rows = NULL;
+    buf->numrows = 0;
+
+    if (!tree->root) {
+        buf_insert_row(buf, 0, "(no undo history)", 17);
+        return;
+    }
+
+    rev_render_node(tree->root, buf, current, "", 1, 1);
+    buf->dirty = 0;
+}
+
+/* Map a buffer row index to the corresponding UndoNode (DFS order). */
+static UndoNode *rev_node_at_row(UndoNode *n, int *row, int target) {
+    if (*row == target) return n;
+    (*row)++;
+    for (int i = 0; i < n->num_children; i++) {
+        UndoNode *found = rev_node_at_row(n->children[i], row, target);
+        if (found) return found;
+    }
+    return NULL;
+}
+
+static void rev_close_pane(void);
+
+static void rev_activate_entry(void) {
+    int rpi = rev_pane_idx();
+    if (rpi < 0) return;
+
+    BufTab *rbt = &E.buftabs[E.panes[rpi].buf_idx];
+    int src_buf = rbt->rev_source_buf;
+
+    /* Find the undo tree (could be live or parked). */
+    UndoTree *tree = (src_buf == E.cur_buftab)
+                     ? &E.undo_tree
+                     : &E.buftabs[src_buf].undo_tree;
+
+    if (!tree->root) return;
+
+    int row = 0;
+    UndoNode *target = rev_node_at_row(tree->root, &row, E.cy);
+    if (!target) return;
+
+    /* Save current buffer state into the current node before switching. */
+    if (tree->current) {
+        /* If the source is the live buffer, capture from E.buf. */
+        if (src_buf == E.cur_buftab) {
+            /* We're in the revisions pane which is active — the source buf
+               is parked. We need to operate on the parked state. */
+        } else {
+            /* Source is parked already. */
+        }
+    }
+
+    /* Close the revisions pane first, which switches focus back to content. */
+    rev_close_pane();
+
+    /* Now the source buffer should be live (or we make it live). */
+    if (E.cur_buftab != src_buf) {
+        pane_save_cursor();
+        editor_buf_save(E.cur_buftab);
+        editor_buf_restore(src_buf);
+        E.cur_buftab = src_buf;
+    }
+
+    /* Save current state into the current undo node. */
+    if (E.undo_tree.current) {
+        undo_state_free(&E.undo_tree.current->state);
+        E.undo_tree.current->state = editor_capture_state();
+    }
+
+    /* Switch to the target node. */
+    E.undo_tree.current = target;
+    editor_restore_state(&target->state);
+}
+
+static void rev_close_pane(void) {
+    int rpi = rev_pane_idx();
+    if (rpi < 0) return;
+
+    int rf_top    = E.panes[rpi].top;
+    int rf_h      = E.panes[rpi].height;
+    int buf_idx   = E.panes[rpi].buf_idx;
+    int rev_active = (E.cur_pane == rpi);
+
+    /* Find content pane to return to. */
+    int cpane = E.last_content_pane;
+    if (cpane < 0 || cpane >= E.num_panes || cpane == rpi ||
+        buftab_is_special(&E.buftabs[E.panes[cpane].buf_idx])) {
+        cpane = -1;
+        for (int i = 0; i < E.num_panes; i++) {
+            if (i != rpi && !buftab_is_special(&E.buftabs[E.panes[i].buf_idx])) {
+                cpane = i; break;
+            }
+        }
+    }
+
+    /* Expand panes above the revisions pane. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i == rpi) continue;
+        Pane *p = &E.panes[i];
+        if (p->top + p->height + 1 == rf_top)
+            p->height += rf_h + 1;
+    }
+
+    /* Free the revisions buffer. */
+    if (rev_active) {
+        for (int i = 0; i < E.buf.numrows; i++) {
+            free(E.buf.rows[i].chars);
+            free(E.buf.rows[i].hl);
+        }
+        free(E.buf.rows);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+    } else {
+        pane_save_cursor();
+        buf_free(&E.buftabs[buf_idx].buf);
+    }
+
+    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+
+    /* Remove pane. */
+    for (int i = rpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
+    E.num_panes--;
+    if (cpane > rpi) cpane--;
+
+    /* Activate content pane. */
+    if (cpane >= 0) {
+        int donor_buf = E.panes[cpane].buf_idx;
+        if (E.cur_buftab != donor_buf) {
+            editor_buf_restore(donor_buf);
+            E.cur_buftab = donor_buf;
+        }
+        E.cur_pane   = cpane;
+        E.screenrows = E.panes[cpane].height;
+        E.screencols = E.panes[cpane].width;
+        E.cx     = E.panes[cpane].cx;
+        E.cy     = E.panes[cpane].cy;
+        E.rowoff = E.panes[cpane].rowoff;
+        E.coloff = E.panes[cpane].coloff;
+    }
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+}
+
+static void rev_open_pane(void) {
+    /* Close existing revisions pane if open (toggle). */
+    if (rev_pane_idx() >= 0) { rev_close_pane(); return; }
+
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+    if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
+
+    /* The source is the current content buffer. */
+    int src_buf = E.cur_buftab;
+    if (buftab_is_special(&E.buftabs[src_buf])) {
+        status_err("No undo tree for special buffers");
+        return;
+    }
+
+    /* Save current state into the undo tree's current node so the display
+       reflects the live buffer accurately. */
+    if (E.undo_tree.current) {
+        undo_state_free(&E.undo_tree.current->state);
+        E.undo_tree.current->state = editor_capture_state();
+    }
+
+    int rh = E.opts.qf_height_rows > 0 ? E.opts.qf_height_rows : 8;
+    if (rh > E.term_rows / 2) rh = E.term_rows / 2;
+    int rev_top = E.term_rows - 1 - rh;
+
+    /* Shrink content panes to make room. */
+    for (int i = 0; i < E.num_panes; i++) {
+        Pane *p = &E.panes[i];
+        if (p->top + p->height >= rev_top) {
+            int new_h = rev_top - 1 - p->top;
+            if (new_h < 2) { status_err("Not enough space for revisions"); return; }
+            p->height = new_h;
+        }
+    }
+
+    if (!buftab_is_special(&E.buftabs[E.panes[E.cur_pane].buf_idx]))
+        E.last_content_pane = E.cur_pane;
+
+    /* Allocate buftab for revisions buffer. */
+    int ridx = E.num_buftabs++;
+    memset(&E.buftabs[ridx], 0, sizeof(BufTab));
+    E.buftabs[ridx].is_revisions  = 1;
+    E.buftabs[ridx].rev_source_buf = src_buf;
+
+    buf_init(&E.buftabs[ridx].buf);
+    rev_render_to_buf(&E.undo_tree, &E.buftabs[ridx].buf, E.undo_tree.current);
+
+    /* Append revisions pane at the bottom. */
+    int rpi = E.num_panes++;
+    E.panes[rpi].top     = rev_top;
+    E.panes[rpi].left    = 1;
+    E.panes[rpi].height  = rh;
+    E.panes[rpi].width   = E.term_cols;
+    E.panes[rpi].buf_idx = ridx;
+    E.panes[rpi].cx = E.panes[rpi].cy = 0;
+    E.panes[rpi].rowoff = E.panes[rpi].coloff = 0;
+
+    /* Find the row index of the current undo node so we can position cursor there. */
+    if (E.undo_tree.root && E.undo_tree.current) {
+        UndoNode **arr = NULL;
+        int count = undo_tree_flatten(&E.undo_tree, &arr);
+        for (int i = 0; i < count; i++) {
+            if (arr[i] == E.undo_tree.current) {
+                /* DFS order row: we need to walk the tree instead. */
+                break;
+            }
+        }
+        if (arr) free(arr);
+
+        /* Walk in DFS order to find current node's row. */
+        int row = 0;
+        for (int r = 0; r < E.buftabs[ridx].buf.numrows; r++) {
+            UndoNode *n = rev_node_at_row(E.undo_tree.root, &row, r);
+            if (n == E.undo_tree.current) {
+                E.panes[rpi].cy = r;
+                /* Scroll so current is visible. */
+                if (r >= rh) E.panes[rpi].rowoff = r - rh / 2;
+                break;
+            }
+            row = 0;  /* reset for next iteration */
+        }
+    }
+
+    /* Activate revisions pane. */
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+    E.cur_pane   = rpi;
+    E.cur_buftab = ridx;
+    E.cx = 0;
+    E.cy = E.panes[rpi].cy;
+    E.rowoff = E.panes[rpi].rowoff;
+    E.coloff = 0;
+    E.screenrows = rh;
+    E.screencols = E.term_cols;
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+    editor_buf_restore(ridx);
+}
+
+static void rev_handle_key(int c) {
+    int rpi = rev_pane_idx();
+    if (rpi < 0) return;
+
+    if (c == 'q' || c == '\x1b') { rev_close_pane(); return; }
+
+    if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
+        E.cy++;
+        if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    } else if ((c == ARROW_UP || c == 'k') && E.cy > 0) {
+        E.cy--;
+        if (E.cy < E.rowoff) E.rowoff = E.cy;
+    } else if (c == 'G') {
+        E.cy = E.buf.numrows - 1;
+        if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    } else if (c == 'g') {
+        /* gg = go to top (simple: next g press goes to top) */
+        E.cy = 0; E.rowoff = 0;
+    } else if (c == '\r') {
+        rev_activate_entry();
+    }
+}
+
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
@@ -3810,6 +4138,12 @@ void editor_execute_command(void) {
         editor_open_tree_pane();
         goto done;
 
+    /* ── :revisions — undo tree browser ─────────────────────────────── */
+    } else if (strcmp(cmd, "revisions") == 0 || strcmp(cmd, "Revisions") == 0
+            || strcmp(cmd, "rev") == 0) {
+        rev_open_pane();
+        goto done;
+
     /* ── :Gdiff ─────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "Gdiff") == 0 || strcmp(cmd, "gdiff") == 0) {
         diff_open();
@@ -4563,6 +4897,12 @@ static void editor_process_normal(int c) {
     /* Log pane: route all keys to log handler. */
     if (E.buftabs[E.cur_buftab].is_log) {
         log_handle_key(c);
+        return;
+    }
+
+    /* Revisions pane: route all keys to revisions handler. */
+    if (E.buftabs[E.cur_buftab].is_revisions) {
+        rev_handle_key(c);
         return;
     }
 
