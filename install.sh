@@ -2,7 +2,7 @@
 set -e
 
 # Quick Ed installer
-# Usage: curl -fsSL https://obscuren.github.io/qe/install.sh | sh
+# Usage: curl -fsSL https://jeff.lookingforteam.com/qe/install.sh | sh
 
 REPO="obscuren/qe"
 INSTALL_DIR="/usr/local/bin"
