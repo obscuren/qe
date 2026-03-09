@@ -179,7 +179,25 @@ A count before `.` (e.g. `5.`) overrides the stored count.
 
 Undo history forms a tree rather than a linear stack. After undoing and making a new edit, the old redo branch is preserved — nothing is ever lost. `u` and `Ctrl-R` navigate the tree branch by branch, while `g-`/`g+` traverse all states chronologically (crossing branches). The tree is capped at 200 nodes; oldest unused leaves are pruned automatically.
 
-Use `:revisions` (or `:rev`) to open a visual tree browser in a split pane below. Navigate with `j`/`k`, press `Enter` to restore any revision, `q` to close. The current node is marked with `◀`.
+#### Local revisions browser
+
+Use `:revisions` (or `:rev`) to open a visual undo tree browser in a sidebar on the left. The tree is rendered with branch visualization:
+
+```
+● initial  ◀  (3 lines, 1:0)
+├─ insert  (4 lines, 2:5)
+│  └─ delete  (3 lines, 1:0)
+└─ insert  (4 lines, 3:12)
+```
+
+| Key     | Action                                      |
+|---------|---------------------------------------------|
+| `j`/`k` | Navigate revisions                         |
+| `G`/`gg`| Jump to last / first revision              |
+| `Enter` | Accept the selected revision               |
+| `q`/`Esc`| Close and revert to original state        |
+
+As you browse, the content pane updates live to preview the selected revision. Changed lines are highlighted in the gutter: `+` (green) for added lines, `~` (yellow) for modified lines. Closing without pressing Enter reverts the buffer to its original state — no changes are committed until you explicitly accept.
 
 ## Operators (Normal mode)
 
