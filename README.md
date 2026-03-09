@@ -110,9 +110,13 @@ The accumulating count and any pending operator are shown live in the status bar
 | `B`              | Move to start of line           |
 | `0`              | Move to start of line           |
 | `$`              | Move to end of line             |
+| `_` / `^`        | First non-blank character       |
+| `{`              | Previous blank line (paragraph) |
+| `}`              | Next blank line (paragraph)     |
 | `gg`             | Jump to first line              |
 | `G`              | Jump to last line               |
 | `{n}G`           | Jump to line n                  |
+| `gd`             | Go to local definition          |
 | `%`              | Jump to matching bracket        |
 | `f{char}`        | Jump to next `char` on line     |
 | `F{char}`        | Jump to prev `char` on line     |
@@ -146,8 +150,10 @@ Enter insert mode with `i` (before cursor), `a` (after cursor), `o` (new line be
 |------------|------------------------------------------------|
 | `x`        | Delete character under cursor                  |
 | `.`        | Repeat last change (count overrides stored count) |
-| `u`        | Undo                                           |
-| `Ctrl-R`   | Redo                                           |
+| `u`        | Undo (tree-based, preserves all branches)      |
+| `Ctrl-R`   | Redo (follows most recent branch)              |
+| `g-`       | Earlier state (chronological across branches)  |
+| `g+`       | Later state (chronological across branches)    |
 | `r{char}`  | Replace character(s) under cursor with `{char}` |
 | `n`        | Repeat search forward                          |
 | `N`        | Repeat search backward                         |
@@ -168,6 +174,12 @@ Enter insert mode with `i` (before cursor), `a` (after cursor), `o` (new line be
 | `o` / `O` + text    | Open new line, re-insert same text          |
 
 A count before `.` (e.g. `5.`) overrides the stored count.
+
+### Undo tree
+
+Undo history forms a tree rather than a linear stack. After undoing and making a new edit, the old redo branch is preserved — nothing is ever lost. `u` and `Ctrl-R` navigate the tree branch by branch, while `g-`/`g+` traverse all states chronologically (crossing branches). The tree is capped at 200 nodes; oldest unused leaves are pruned automatically.
+
+Use `:revisions` (or `:rev`) to open a visual tree browser in a split pane below. Navigate with `j`/`k`, press `Enter` to restore any revision, `q` to close. The current node is marked with `◀`.
 
 ## Operators (Normal mode)
 
@@ -349,6 +361,11 @@ Unsaved changes are indicated by `[+]` in the status bar. Commands that would di
 | `Ctrl-W Ctrl-W`| Cycle to next pane                      |
 | `Ctrl-W c`     | Close current pane                      |
 | `Ctrl-W q`     | Close current pane                      |
+| `Ctrl-W +`     | Increase pane height                    |
+| `Ctrl-W -`     | Decrease pane height                    |
+| `Ctrl-W >`     | Increase pane width                     |
+| `Ctrl-W <`     | Decrease pane width                     |
+| `Ctrl-W =`     | Equalize pane widths                    |
 
 Each pane has its own cursor position and scroll offset. Two panes may display the same buffer simultaneously — edits in one are immediately visible in the other. The new pane becomes the active one immediately after a split.
 
