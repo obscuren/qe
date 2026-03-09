@@ -149,7 +149,23 @@ nav {
     font-size: 1.25rem;
     color: var(--text-dim);
     max-width: 600px;
+    margin: 0 auto 0.75rem;
+}
+
+.research-note {
+    font-size: 0.95rem;
+    color: var(--text-dim);
+    opacity: 0.7;
     margin: 0 auto 3rem;
+}
+
+.research-note a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.research-note a:hover {
+    text-decoration: underline;
 }
 
 /* ── Terminal window ─────────────────────────────────────────────── */
