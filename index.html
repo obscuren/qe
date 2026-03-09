@@ -24,8 +24,7 @@
 <!-- ── Hero ────────────────────────────────────────────────────────── -->
 <section class="hero">
     <h1>Quick Ed</h1>
-    <p class="tagline">A fast, lightweight terminal editor with modal editing, built-in git, and AI assistance.</p>
-    <p class="research-note">This is a research project — Quick Ed has been entirely built based on prompting using <a href="https://claude.ai">Claude</a>.</p>
+    <p class="tagline">A fast, lightweight terminal editor with modal editing and built-in git.</p>
     <div class="terminal-window">
         <div class="terminal-bar">
             <span class="dot red"></span>
@@ -146,12 +145,6 @@
         </div>
 
         <div class="feature-card">
-            <div class="feature-icon">AI</div>
-            <h3>Claude AI</h3>
-            <p>Built-in Claude integration. Chat pane with streaming responses (<code>:Claude</code>). Inline ghost-text completion (<code>Ctrl-L</code>). Apply code suggestions with <code>:Capply</code>. Auto-context from open buffers.</p>
-        </div>
-
-        <div class="feature-card">
             <div class="feature-icon">lua</div>
             <h3>Lua Config</h3>
             <p>Full Lua scripting via <code>~/.config/qe/init.lua</code>. Set options, bind keys, add syntax definitions, register CLI subcommands. Lua bindings override built-in keys.</p>
@@ -261,19 +254,6 @@ sudo cmake --install build    <span class="comment"># installs to /usr/local/bin
                 <tr><td><code>:grep pattern</code></td><td>Search across files</td></tr>
                 <tr><td><code>:Gblame</code> / <code>:Gdiff</code></td><td>Git blame / diff</td></tr>
                 <tr><td><code>:Glog</code> / <code>:Gcommit</code></td><td>Git log / commit</td></tr>
-            </table>
-        </div>
-
-        <div class="doc-section">
-            <h3>Claude AI</h3>
-            <table>
-                <tr><td><code>:Claude prompt</code></td><td>Chat with Claude</td></tr>
-                <tr><td><code>:Cexplain</code></td><td>Explain current file</td></tr>
-                <tr><td><code>:Cfix</code> / <code>:Creview</code></td><td>Fix / review code</td></tr>
-                <tr><td><code>:Ccontext file</code></td><td>Add context file</td></tr>
-                <tr><td><code>:Capply</code></td><td>Apply code suggestion</td></tr>
-                <tr><td><code>Ctrl-L</code></td><td>Inline completion (insert mode)</td></tr>
-                <tr><td><code>Tab</code></td><td>Accept ghost text</td></tr>
             </table>
         </div>
 
