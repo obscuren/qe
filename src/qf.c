@@ -1,25 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "qf.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* Wrap s in single quotes for safe shell use; writes into out[outlen]. */
-static void shell_quote(const char *s, char *out, int outlen) {
-    int j = 0;
-    if (j < outlen - 1) out[j++] = '\'';
-    for (int i = 0; s[i] && j < outlen - 5; i++) {
-        if (s[i] == '\'') {
-            /* ' → '\'' */
-            out[j++] = '\''; out[j++] = '\\'; out[j++] = '\''; out[j++] = '\'';
-        } else {
-            out[j++] = s[i];
-        }
-    }
-    if (j < outlen - 1) out[j++] = '\'';
-    out[j] = '\0';
-}
 
 /* Parse one line of rg --vimgrep output: path:line:col:text
    Falls back to grep -n format:            path:line:text     */
