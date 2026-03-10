@@ -54,7 +54,7 @@ typedef struct {
     TermState *term;      /* non-NULL when is_term == 1                     */
     int        is_revisions; /* 1 = this slot holds the local revisions browser */
     int        rev_source_buf; /* buf_idx of the file whose undo tree we show  */
-    int        watch_wd;       /* inotify watch descriptor, -1 = none       */
+    int        watch_handle;   /* watch handle: inotify wd on Linux, open file fd on macOS; -1 = none */
     int        file_changed;  /* 1 = external modification detected        */
     int        watch_skip;    /* >0 = ignore next N modify events (our save) */
 } BufTab;
@@ -236,8 +236,8 @@ typedef struct {
     int  pending_bracket;   /* ']' or '[' waiting for second key, 0 = none  */
     int  pending_leader_h;  /* 1 = <leader>h pressed, waiting for s/r       */
 
-    /* File watching (inotify) */
-    int  inotify_fd;        /* inotify file descriptor, -1 = disabled       */
+    /* File watching (inotify on Linux, kqueue on macOS) */
+    int  file_watch_fd;     /* file watching fd (inotify on Linux, kqueue on macOS), -1 = disabled */
     int  watch_prompt_buf;  /* buftab idx awaiting reload confirm, -1=none  */
 } EditorConfig;
 
@@ -260,11 +260,7 @@ void      editor_restore_state(const UndoState *s);
 void editor_buf_save(int i);
 void editor_buf_restore(int i);
 
-/* File watching (inotify). */
-void editor_watch_init(void);
-void editor_watch_add(int buftab_idx);
-void editor_watch_remove(int buftab_idx);
-void editor_watch_drain(void);
+#include "filewatcher.h"
 void editor_reload_buf(int buftab_idx);
 
 #endif

@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -115,7 +114,7 @@ void editor_init(void) {
     E.git_branch[0]    = '\0';
     E.pending_bracket  = 0;
     E.pending_leader_h = 0;
-    E.inotify_fd       = -1;
+    E.file_watch_fd    = -1;
     E.watch_prompt_buf = -1;
     git_current_branch(E.git_branch, sizeof(E.git_branch));
 }
@@ -272,9 +271,9 @@ int editor_poll_for_input(void) {
     int nfds = 0;
     int inotify_slot = -1;
     pfds[nfds++] = (struct pollfd){ .fd = STDIN_FILENO, .events = POLLIN };
-    if (E.inotify_fd >= 0) {
+    if (E.file_watch_fd >= 0) {
         inotify_slot = nfds;
-        pfds[nfds++] = (struct pollfd){ .fd = E.inotify_fd, .events = POLLIN };
+        pfds[nfds++] = (struct pollfd){ .fd = E.file_watch_fd, .events = POLLIN };
     }
     for (int i = 0; i < E.num_buftabs; i++) {
         if (E.buftabs[i].is_term && E.buftabs[i].term
@@ -287,104 +286,10 @@ int editor_poll_for_input(void) {
     if (pr <= 0) return 0;
 
     if (inotify_slot >= 0 && (pfds[inotify_slot].revents & POLLIN))
-        editor_watch_drain();
+        filewatcher_drain();
     if (pfds[0].revents & POLLIN)
         editor_process_keypress();
     return 1;
-}
-
-/* ── File watching (inotify) ──────────────────────────────────────── */
-
-void editor_watch_init(void) {
-    E.inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-    /* -1 on failure is fine — watching is best-effort */
-}
-
-void editor_watch_add(int buftab_idx) {
-    if (E.inotify_fd < 0) return;
-    BufTab *bt = &E.buftabs[buftab_idx];
-
-    /* Only watch regular file buffers. */
-    const char *path = (buftab_idx == E.cur_buftab)
-                       ? E.buf.filename : bt->buf.filename;
-    if (!path || buftab_is_special(bt)) { bt->watch_wd = -1; return; }
-
-    /* Remove existing watch if any. */
-    if (bt->watch_wd >= 0) {
-        inotify_rm_watch(E.inotify_fd, bt->watch_wd);
-        bt->watch_wd = -1;
-    }
-
-    bt->watch_wd = inotify_add_watch(E.inotify_fd, path,
-                                      IN_MODIFY | IN_DELETE_SELF | IN_MOVE_SELF);
-    bt->file_changed = 0;
-}
-
-void editor_watch_remove(int buftab_idx) {
-    if (E.inotify_fd < 0) return;
-    BufTab *bt = &E.buftabs[buftab_idx];
-    if (bt->watch_wd >= 0) {
-        inotify_rm_watch(E.inotify_fd, bt->watch_wd);
-        bt->watch_wd = -1;
-    }
-    bt->file_changed = 0;
-}
-
-void editor_watch_drain(void) {
-    if (E.inotify_fd < 0) return;
-
-    /* Read all pending inotify events. */
-    char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
-    for (;;) {
-        ssize_t n = read(E.inotify_fd, buf, sizeof(buf));
-        if (n <= 0) break;
-
-        for (char *ptr = buf; ptr < buf + n; ) {
-            struct inotify_event *ev = (struct inotify_event *)ptr;
-            ptr += sizeof(*ev) + ev->len;
-
-            /* Find the buftab that owns this watch descriptor. */
-            for (int i = 0; i < E.num_buftabs; i++) {
-                if (E.buftabs[i].watch_wd == ev->wd) {
-                    /* Skip events caused by our own save. */
-                    if ((ev->mask & IN_MODIFY) && E.buftabs[i].watch_skip > 0) {
-                        E.buftabs[i].watch_skip--;
-                        break;
-                    }
-                    E.buftabs[i].file_changed = 1;
-
-                    /* Deleted/moved: the watch is auto-removed by the kernel. */
-                    if (ev->mask & (IN_DELETE_SELF | IN_MOVE_SELF))
-                        E.buftabs[i].watch_wd = -1;
-                    break;
-                }
-            }
-        }
-    }
-
-    /* Show reload prompt for the first changed buffer found.
-       Only one prompt at a time — remaining changes queued via file_changed. */
-    if (E.watch_prompt_buf >= 0) return;  /* already prompting */
-
-    for (int i = 0; i < E.num_buftabs; i++) {
-        if (!E.buftabs[i].file_changed) continue;
-        E.buftabs[i].file_changed = 0;
-
-        const char *fname = (i == E.cur_buftab) ? E.buf.filename
-                                                 : E.buftabs[i].buf.filename;
-        if (!fname) continue;
-        const char *base = strrchr(fname, '/');
-        base = base ? base + 1 : fname;
-
-        E.watch_prompt_buf = i;
-        E.statusmsg_is_error = 1;
-        snprintf(E.statusmsg, sizeof(E.statusmsg),
-                 "W: \"%s\" changed on disk. [O]K, (L)oad File: ", base);
-
-        /* Re-add watch so future changes are also detected. */
-        editor_watch_add(i);
-        break;  /* handle one at a time */
-    }
 }
 
 void editor_reload_buf(int buftab_idx) {
@@ -418,7 +323,7 @@ void editor_reload_buf(int buftab_idx) {
             E.buftabs[buftab_idx].cy = b->numrows > 0 ? b->numrows - 1 : 0;
     }
 
-    editor_watch_add(buftab_idx);
+    filewatcher_add(buftab_idx);
 }
 
 #endif /* QE_TEST */
