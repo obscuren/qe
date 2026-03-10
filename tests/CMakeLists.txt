@@ -43,3 +43,24 @@ add_executable(test_syntax
 target_include_directories(test_syntax PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_syntax PRIVATE unity)
 add_test(NAME syntax COMMAND test_syntax)
+
+add_executable(test_render
+    test_render.c
+    ${CMAKE_SOURCE_DIR}/src/render.c
+    ${CMAKE_SOURCE_DIR}/src/editor.c
+    ${CMAKE_SOURCE_DIR}/src/buf.c
+    ${CMAKE_SOURCE_DIR}/src/syntax.c
+    ${CMAKE_SOURCE_DIR}/src/lang.c
+    ${CMAKE_SOURCE_DIR}/src/git.c
+    ${CMAKE_SOURCE_DIR}/src/utils.c
+    ${CMAKE_SOURCE_DIR}/src/terminal.c
+    ${CMAKE_SOURCE_DIR}/src/undo.c
+    ${CMAKE_SOURCE_DIR}/src/fuzzy.c
+    ${CMAKE_SOURCE_DIR}/src/search.c
+    ${CMAKE_SOURCE_DIR}/src/qf.c
+    ${CMAKE_SOURCE_DIR}/src/term_emu.c
+)
+target_include_directories(test_render PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_render PRIVATE QE_TEST)
+target_link_libraries(test_render PRIVATE unity)
+add_test(NAME render COMMAND test_render)

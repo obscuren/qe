@@ -3454,8 +3454,6 @@ static void rev_handle_key(int c) {
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H",  3);
     write(STDOUT_FILENO, "\x1b[0 q", 5);  /* reset cursor shape */
     exit(EXIT_SUCCESS);
 }
