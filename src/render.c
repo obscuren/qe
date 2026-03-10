@@ -879,6 +879,23 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     }
 }
 
+/* Render a simple status bar: reverse-video background, left text, right text,
+   gap-filled with spaces. Used by all special buffer types. */
+static void status_bar_simple(AppendBuf *ab, const Pane *p, int is_active,
+                               const char *left, int llen,
+                               const char *right, int rlen) {
+    ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+    char erase[16];
+    int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+    ab_append(ab, erase, elen);
+    if (llen > p->width) llen = p->width;
+    ab_append(ab, left, llen);
+    int gap = p->width - llen - rlen;
+    while (gap-- > 0) ab_append(ab, " ", 1);
+    if (rlen > 0 && llen + rlen <= p->width) ab_append(ab, right, rlen);
+    ab_append(ab, "\x1b[m", 3);
+}
+
 static void draw_pane_status(AppendBuf *ab, const Pane *p,
                              const Buffer *buf, int pcx, int pcy,
                              int is_active) {
@@ -911,10 +928,6 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
 
     /* Terminal pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_TERM) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         TermState *ts = E.buftabs[p->buf_idx].term;
         char left[128], right[32];
         const char *state = (ts && ts->exited) ? "finished" : "running";
@@ -922,21 +935,12 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         int rlen = 0;
         if (ts && ts->exited)
             rlen = snprintf(right, sizeof(right), "exit %d", ts->exit_status);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (rlen > 0 && llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Quickfix pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_QF) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         QfList *ql = E.buftabs[p->buf_idx].qf;
         char left[128], right[16];
         int llen = ql
@@ -944,146 +948,78 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
                        ql->count, ql->pattern)
             : snprintf(left,  sizeof(left),  " [Quickfix]");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Blame pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_BLAME) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         int src = E.buftabs[p->buf_idx].blame_source_buf;
         const char *fname = E.buftabs[src].buf.filename;
         if (!fname) fname = "[No Name]";
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left), " [Blame] %.30s", fname);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Diff pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_DIFF) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         const char *fname = buf->filename ? buf->filename : "[No Name]";
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left), " [HEAD] %.30s", fname);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Commit buffer: status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_COMMIT) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left),
                             " [Commit] :wq to commit, :q to abort");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Log pane: status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_LOG) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         int lc = E.buftabs[p->buf_idx].log_count;
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left),
                             " [Git Log] %d commits", lc);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Git show (commit diff) pane: status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_SHOW) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[128], right[16];
         const char *fn = buf->filename ? buf->filename : "";
         int llen = snprintf(left, sizeof(left), " %s", fn);
         int rlen = snprintf(right, sizeof(right), "%d/%d", pcy + 1, buf->numrows);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Tree pane: special compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_TREE) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[32], right[16];
         int llen = snprintf(left,  sizeof(left),  " [Tree]");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Revisions pane: compact status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_REVISIONS) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[64], right[16];
         int llen = snprintf(left,  sizeof(left),  " [Local Revisions]");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
