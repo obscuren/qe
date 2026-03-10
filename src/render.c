@@ -1468,10 +1468,11 @@ void editor_refresh_screen(void) {
 
     AppendBuf ab = ABUF_INIT;
 
-    ab_append(&ab, "\x1b[?25l", 6);  /* hide cursor */
-    ab_append(&ab, "\x1b[m",    3);  /* reset attributes before clear */
-    ab_append(&ab, "\x1b[H",    3);  /* cursor to home      */
-    ab_append(&ab, "\x1b[J",    3);  /* erase to end of screen (no scrollback push on macOS) */
+    ab_append(&ab, "\x1b[?2026h", 8); /* begin synchronized update */
+    ab_append(&ab, "\x1b[?25l",   6); /* hide cursor */
+    ab_append(&ab, "\x1b[m",      3); /* reset attributes before clear */
+    ab_append(&ab, "\x1b[H",      3); /* cursor to home      */
+    ab_append(&ab, "\x1b[J",      3); /* erase to end of screen (no scrollback push on macOS) */
 
     /* Draw inactive panes first, then active on top (for shared buffers). */
     for (int pass = 0; pass < 2; pass++) {
@@ -1580,7 +1581,8 @@ void editor_refresh_screen(void) {
                        ap->left + (vcx - E.coloff) + gutter_width());
     }
     ab_append(&ab, buf, len);
-    ab_append(&ab, "\x1b[?25h", 6);  /* show cursor */
+    ab_append(&ab, "\x1b[?25h",   6); /* show cursor */
+    ab_append(&ab, "\x1b[?2026l", 8); /* end synchronized update */
 
     write(STDOUT_FILENO, ab.b, ab.len);
     ab_free(&ab);
