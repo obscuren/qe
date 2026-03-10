@@ -5031,17 +5031,26 @@ static void editor_process_normal(int c) {
         return;
     }
 
+    /* Pending <leader>g — git view: b=blame, l=log, d=diff, c=commit. */
+    if (E.pending_leader_g) {
+        E.pending_leader_g = 0;
+        if      (c == 'b') blame_open();
+        else if (c == 'l') log_open();
+        else if (c == 'd') diff_open();
+        else if (c == 'c') commit_open();
+        else               status_err("Unknown git command: g%c", (char)c);
+        return;
+    }
+
     /* Pending leader key sequence. */
     if (E.pending_leader) {
         E.pending_leader = 0;
-        if (c == 'h') {
-            E.pending_leader_h = 1;
-            return;
-        }
-        if (c == 'b') {
-            fuzzy_open_buffers();
-            return;
-        }
+        if (c == 'h') { E.pending_leader_h = 1; return; }
+        if (c == 'g') { E.pending_leader_g = 1; return; }
+        if (c == 'b') { fuzzy_open_buffers();     return; }
+        if (c == 't') { editor_open_fuzzy();      return; }
+        if (c == 'r') { rev_open_pane();           return; }
+        if (c == 'x') { editor_open_terminal(NULL); return; }
         if (!lua_bridge_call_key(MODE_NORMAL, LEADER_BASE + c))
             status_err("No mapping for <leader>%c", (char)c);
         return;

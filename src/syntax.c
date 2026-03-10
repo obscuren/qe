@@ -25,7 +25,7 @@ const SyntaxDef *syntax_detect(const char *filename) {
     if (!dot || dot == filename) return NULL;
     const char *ext = dot + 1;
 
-    for (int i = 0; i < num_syntaxes; i++) {
+    for (int i = num_syntaxes - 1; i >= 0; i--) {   /* newest first: user defs win */
         SyntaxDef *def = registry[i];
         for (int j = 0; j < def->num_filetypes; j++) {
             if (strcmp(def->filetypes[j], ext) == 0)

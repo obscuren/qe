@@ -2,6 +2,7 @@
 #include "editor.h"
 #include "git.h"
 #include "input.h"
+#include "lang.h"
 #include "terminal.h"
 #include "term_emu.h"
 #include "utils.h"
@@ -114,9 +115,12 @@ void editor_init(void) {
     E.git_branch[0]    = '\0';
     E.pending_bracket  = 0;
     E.pending_leader_h = 0;
+    E.pending_leader_g = 0;
     E.file_watch_fd    = -1;
     E.watch_prompt_buf = -1;
     git_current_branch(E.git_branch, sizeof(E.git_branch));
+
+    lang_register_defaults();
 }
 
 void editor_detect_syntax(void) {
