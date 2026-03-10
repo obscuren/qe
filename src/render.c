@@ -758,7 +758,10 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             if (gw > 0) {
                 int has_git = (buf->git_signs != NULL);
                 char num[16];
-                int  nlen = snprintf(num, sizeof(num), "%d", filerow + 1);
+                int display_num = (E.opts.relative_line_numbers && filerow != pcy)
+                                  ? (filerow > pcy ? filerow - pcy : pcy - filerow)
+                                  : filerow + 1;
+                int  nlen = snprintf(num, sizeof(num), "%d", display_num);
                 int  num_gw = gw - (has_marks ? 2 : 0) - (has_git ? 1 : 0);
                 int  pad  = num_gw - 1 - nlen;
 

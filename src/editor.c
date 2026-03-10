@@ -28,7 +28,8 @@ void editor_init(void) {
     E.cmdlen       = 0;
     E.statusmsg[0] = '\0';
     E.statusmsg_is_error = 0;
-    E.opts.line_numbers   = 1;
+    E.opts.line_numbers          = 1;
+    E.opts.relative_line_numbers = 0;
     E.opts.autoindent     = 1;
     E.opts.tabwidth       = 4;
     E.opts.fuzzy_width_pct = 40;

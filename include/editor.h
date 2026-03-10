@@ -84,7 +84,8 @@ typedef enum {
 /* All user-configurable settings live here so they can later be
    exposed as a single table to Lua via qe.set_option(). */
 typedef struct {
-    int line_numbers;   /* 1 = show, 0 = hide */
+    int line_numbers;           /* 1 = show, 0 = hide */
+    int relative_line_numbers;  /* 1 = show distances; cursor line shows absolute */
     int autoindent;     /* 1 = copy indentation on Enter/o/O */
     int tabwidth;       /* spaces inserted by Tab key (default 4) */
     int fuzzy_width_pct;  /* fuzzy panel width as % of terminal (default 40) */

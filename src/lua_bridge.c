@@ -51,6 +51,8 @@ static int l_set_option(lua_State *LS) {
     const char *name = luaL_checkstring(LS, 1);
     if (strcmp(name, "line_numbers") == 0) {
         E.opts.line_numbers = lua_toboolean(LS, 2);
+    } else if (strcmp(name, "relative_line_numbers") == 0) {
+        E.opts.relative_line_numbers = lua_toboolean(LS, 2);
     } else if (strcmp(name, "autoindent") == 0) {
         E.opts.autoindent = lua_toboolean(LS, 2);
     } else if (strcmp(name, "tabwidth") == 0) {
