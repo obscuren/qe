@@ -1597,7 +1597,7 @@ static void pane_activate(int idx) {
     E.rowoff = p->rowoff; E.coloff = p->coloff;
     E.cur_buftab = new_buf;
     if (old_buf != new_buf) editor_buf_restore(new_buf);
-    E.mode = E.buftabs[new_buf].is_term ? MODE_INSERT : MODE_NORMAL;
+    E.mode = E.buftabs[new_buf].kind == BT_TERM ? MODE_INSERT : MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
@@ -1687,7 +1687,7 @@ static void pane_close(int idx) {
     E.screencols = dp->width;
     E.cx = dp->cx; E.cy = dp->cy;
     E.rowoff = dp->rowoff; E.coloff = dp->coloff;
-    E.mode = E.buftabs[donor_buf].is_term ? MODE_INSERT : MODE_NORMAL;
+    E.mode = E.buftabs[donor_buf].kind == BT_TERM ? MODE_INSERT : MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
@@ -1853,7 +1853,7 @@ static void editor_open_tree_pane(void) {
     /* Check if a tree pane is already open — toggle it closed. */
     int tree_pane = -1;
     for (int i = 0; i < E.num_panes; i++) {
-        if (E.buftabs[E.panes[i].buf_idx].is_tree) { tree_pane = i; break; }
+        if (E.buftabs[E.panes[i].buf_idx].kind == BT_TREE) { tree_pane = i; break; }
     }
     if (tree_pane >= 0) {
         Pane *tp = &E.panes[tree_pane];
@@ -1923,7 +1923,7 @@ static void editor_open_tree_pane(void) {
     /* Allocate a new buftab for the tree buffer. */
     int tidx = E.num_buftabs++;
     memset(&E.buftabs[tidx], 0, sizeof(BufTab));
-    E.buftabs[tidx].is_tree = 1;
+    E.buftabs[tidx].kind = BT_TREE;
     E.buftabs[tidx].tree    = malloc(sizeof(TreeState));
     if (!E.buftabs[tidx].tree) { E.num_buftabs--; status_err("Out of memory"); return; }
     memset(E.buftabs[tidx].tree, 0, sizeof(TreeState));
@@ -2001,7 +2001,7 @@ void editor_open_fuzzy(void) {
 
 static int blame_pane_idx(void) {
     for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].is_blame) return i;
+        if (E.buftabs[E.panes[i].buf_idx].kind == BT_BLAME) return i;
     return -1;
 }
 
@@ -2094,7 +2094,7 @@ static void blame_open(void) {
     /* Allocate blame buftab. */
     int bidx = E.num_buftabs++;
     memset(&E.buftabs[bidx], 0, sizeof(BufTab));
-    E.buftabs[bidx].is_blame = 1;
+    E.buftabs[bidx].kind = BT_BLAME;
     E.buftabs[bidx].blame_source_buf = E.cur_buftab;
     buf_init(&E.buftabs[bidx].buf);
 
@@ -2175,7 +2175,7 @@ static void blame_handle_key(int c) {
 
 static int log_pane_idx(void) {
     for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].is_log) return i;
+        if (E.buftabs[E.panes[i].buf_idx].kind == BT_LOG) return i;
     return -1;
 }
 
@@ -2254,7 +2254,7 @@ static void log_open(void) {
     /* Allocate log buftab. */
     int lidx = E.num_buftabs++;
     memset(&E.buftabs[lidx], 0, sizeof(BufTab));
-    E.buftabs[lidx].is_log = 1;
+    E.buftabs[lidx].kind = BT_LOG;
     E.buftabs[lidx].log_entries = entries;
     E.buftabs[lidx].log_count   = log_count;
     buf_init(&E.buftabs[lidx].buf);
@@ -2336,7 +2336,7 @@ static void log_show_commit(const char *hash) {
     }
     free(lines);
     E.buftabs[cidx].buf.dirty = 0;
-    E.buftabs[cidx].is_show = 1;
+    E.buftabs[cidx].kind = BT_SHOW;
 
     /* Build git_signs from diff line prefixes for background highlighting. */
     Buffer *cb = &E.buftabs[cidx].buf;
@@ -2410,7 +2410,7 @@ static void commit_open(void) {
     /* Allocate commit buftab. */
     int cidx = E.num_buftabs++;
     memset(&E.buftabs[cidx], 0, sizeof(BufTab));
-    E.buftabs[cidx].is_commit = 1;
+    E.buftabs[cidx].kind = BT_COMMIT;
     buf_init(&E.buftabs[cidx].buf);
 
     /* Populate with template. */
@@ -2525,7 +2525,7 @@ static void commit_execute(void) {
 
 static int diff_pane_idx(void) {
     for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].is_diff) return i;
+        if (E.buftabs[E.panes[i].buf_idx].kind == BT_DIFF) return i;
     return -1;
 }
 
@@ -2617,7 +2617,7 @@ static void diff_open(void) {
     /* Allocate diff buftab. */
     int didx = E.num_buftabs++;
     memset(&E.buftabs[didx], 0, sizeof(BufTab));
-    E.buftabs[didx].is_diff = 1;
+    E.buftabs[didx].kind = BT_DIFF;
     E.buftabs[didx].diff_source_buf = E.cur_buftab;
     E.buftabs[didx].syntax = syntax_detect(E.buf.filename);
     buf_init(&E.buftabs[didx].buf);
@@ -2635,31 +2635,19 @@ static void diff_open(void) {
 
     /* Compute diff signs for both sides (background highlighting). */
     {
-        const char **nc = malloc(sizeof(char *) * E.buf.numrows);
-        int *nl = malloc(sizeof(int) * E.buf.numrows);
-        const char **oc = malloc(sizeof(char *) * head_count);
-        int *ol = malloc(sizeof(int) * head_count);
         Buffer *hbuf = &E.buftabs[didx].buf;
-        if (nc && nl && oc && ol) {
-            for (int i = 0; i < E.buf.numrows; i++) {
-                nc[i] = E.buf.rows[i].chars;
-                nl[i] = E.buf.rows[i].len;
-            }
-            for (int i = 0; i < hbuf->numrows; i++) {
-                oc[i] = hbuf->rows[i].chars;
-                ol[i] = hbuf->rows[i].len;
-            }
-            char *ns = NULL, *os = NULL;
-            git_diff_signs_both(E.buf.filename, nc, nl, E.buf.numrows,
-                                oc, ol, hbuf->numrows, &ns, &os);
-            free(E.buf.git_signs);
-            E.buf.git_signs = ns;
-            E.buf.git_signs_count = ns ? E.buf.numrows : 0;
-            free(hbuf->git_signs);
-            hbuf->git_signs = os;
-            hbuf->git_signs_count = os ? hbuf->numrows : 0;
-        }
-        free(nc); free(nl); free(oc); free(ol);
+        GitLines new_gl = git_lines_from_buf(&E.buf);
+        GitLines old_gl = git_lines_from_buf(hbuf);
+        char *ns = NULL, *os = NULL;
+        git_diff_signs_both(E.buf.filename, &new_gl, &old_gl, &ns, &os);
+        git_lines_free(&new_gl);
+        git_lines_free(&old_gl);
+        free(E.buf.git_signs);
+        E.buf.git_signs = ns;
+        E.buf.git_signs_count = ns ? E.buf.numrows : 0;
+        free(hbuf->git_signs);
+        hbuf->git_signs = os;
+        hbuf->git_signs_count = os ? hbuf->numrows : 0;
     }
 
     /* Split: left = HEAD (diff), right = working copy. */
@@ -2705,20 +2693,6 @@ static void diff_open(void) {
 
 /* ── Hunk operations ─────────────────────────────────────────────────── */
 
-/* Build char/int arrays from live buffer for git functions. */
-static void buf_to_arrays(const char ***out_chars, int **out_lens) {
-    const char **c = malloc(sizeof(char *) * E.buf.numrows);
-    int *l = malloc(sizeof(int) * E.buf.numrows);
-    if (c && l) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            c[i] = E.buf.rows[i].chars;
-            l[i] = E.buf.rows[i].len;
-        }
-    }
-    *out_chars = c;
-    *out_lens = l;
-}
-
 /* Find which hunk (0-based) contains cursor line cy (0-based).
    Returns -1 if cursor is not in any hunk. */
 static int find_hunk_at_cursor(DiffHunk *hunks, int nhunks, int cy) {
@@ -2742,26 +2716,23 @@ static void hunk_stage(void) {
     if (!E.buf.filename || E.buf.numrows <= 0) {
         status_err("No file to stage"); return;
     }
-    const char **chars; int *lens;
-    buf_to_arrays(&chars, &lens);
-    if (!chars || !lens) { free(chars); free(lens); return; }
+    GitLines gl = git_lines_from_buf(&E.buf);
 
     int nhunks = 0;
-    DiffHunk *hunks = git_get_hunks(E.buf.filename, chars, lens,
-                                    E.buf.numrows, &nhunks);
+    DiffHunk *hunks = git_get_hunks(E.buf.filename, &gl, &nhunks);
     if (!hunks) {
-        free(chars); free(lens);
+        git_lines_free(&gl);
         status_err("No changes to stage"); return;
     }
 
     int idx = find_hunk_at_cursor(hunks, nhunks, E.cy);
     if (idx < 0) {
-        free(hunks); free(chars); free(lens);
+        free(hunks); git_lines_free(&gl);
         status_err("Cursor not on a changed hunk"); return;
     }
 
-    int ok = git_stage_hunk(E.buf.filename, chars, lens, E.buf.numrows, idx);
-    free(hunks); free(chars); free(lens);
+    int ok = git_stage_hunk(E.buf.filename, &gl, idx);
+    free(hunks); git_lines_free(&gl);
 
     if (ok) {
         snprintf(E.statusmsg, sizeof(E.statusmsg), "Hunk staged");
@@ -2776,14 +2747,10 @@ static void hunk_revert(void) {
     if (!E.buf.filename || E.buf.numrows <= 0) {
         status_err("No file to revert"); return;
     }
-    const char **chars; int *lens;
-    buf_to_arrays(&chars, &lens);
-    if (!chars || !lens) { free(chars); free(lens); return; }
-
+    GitLines gl = git_lines_from_buf(&E.buf);
     int nhunks = 0;
-    DiffHunk *hunks = git_get_hunks(E.buf.filename, chars, lens,
-                                    E.buf.numrows, &nhunks);
-    free(chars); free(lens);
+    DiffHunk *hunks = git_get_hunks(E.buf.filename, &gl, &nhunks);
+    git_lines_free(&gl);
     if (!hunks) { status_err("No changes to revert"); return; }
 
     int idx = find_hunk_at_cursor(hunks, nhunks, E.cy);
@@ -2832,7 +2799,7 @@ static void hunk_revert(void) {
 
 static int qf_pane_idx(void) {
     for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].is_qf) return i;
+        if (E.buftabs[E.panes[i].buf_idx].kind == BT_QF) return i;
     return -1;
 }
 
@@ -2996,7 +2963,7 @@ static void qf_open_pane(QfList *ql) {
     /* Allocate buftab for qf buffer. */
     int qidx = E.num_buftabs++;
     memset(&E.buftabs[qidx], 0, sizeof(BufTab));
-    E.buftabs[qidx].is_qf = 1;
+    E.buftabs[qidx].kind = BT_QF;
     E.buftabs[qidx].qf    = ql;
 
     buf_init(&E.buftabs[qidx].buf);
@@ -3052,7 +3019,7 @@ static int       rev_saved_src_buf;  /* buftab index of the source buffer */
 
 static int rev_pane_idx(void) {
     for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].is_revisions) return i;
+        if (E.buftabs[E.panes[i].buf_idx].kind == BT_REVISIONS) return i;
     return -1;
 }
 
@@ -3376,7 +3343,7 @@ static void rev_open_pane(void) {
     /* Allocate buftab for revisions buffer. */
     int ridx = E.num_buftabs++;
     memset(&E.buftabs[ridx], 0, sizeof(BufTab));
-    E.buftabs[ridx].is_revisions   = 1;
+    E.buftabs[ridx].kind = BT_REVISIONS;
     E.buftabs[ridx].rev_source_buf = src_buf;
 
     buf_init(&E.buftabs[ridx].buf);
@@ -3647,7 +3614,6 @@ static int open_new_buf(const char *filename) {
 static void term_close_buf(int bi) {
     term_emu_close(E.buftabs[bi].term);
     E.buftabs[bi].term = NULL;
-    E.buftabs[bi].is_term = 0;
 
     /* Find the pane showing this buffer. */
     int pane_idx = -1;
@@ -3728,7 +3694,7 @@ static void editor_open_terminal(const char *cmd) {
         status_err("Failed to open terminal");
         return;
     }
-    E.buftabs[idx].is_term = 1;
+    E.buftabs[idx].kind = BT_TERM;
     E.buftabs[idx].term = ts;
     E.mode = MODE_INSERT;  /* start in terminal-insert (keys go to PTY) */
 }
@@ -3751,10 +3717,9 @@ static int close_cur_buf(int force) {
         return 1;   /* last content buffer — tell caller to quit */
 
     /* Free current live resources. */
-    if (E.buftabs[E.cur_buftab].is_term) {
+    if (E.buftabs[E.cur_buftab].kind == BT_TERM) {
         term_emu_close(E.buftabs[E.cur_buftab].term);
         E.buftabs[E.cur_buftab].term = NULL;
-        E.buftabs[E.cur_buftab].is_term = 0;
     }
     buf_free(&E.buf);
     undo_tree_free(&E.undo_tree);
@@ -4037,7 +4002,7 @@ void editor_execute_command(void) {
         if ((dw || dq) && (*p == '\0' || arg)) {
 
             /* Tree pane is read-only; :q from tree closes sidebar or quits. */
-            if (E.buftabs[E.cur_buftab].is_tree) {
+            if (E.buftabs[E.cur_buftab].kind == BT_TREE) {
                 if (dw) { status_err("Tree pane is read-only"); goto done; }
                 if (dq) {
                     if (E.num_panes > 1) {
@@ -4065,7 +4030,7 @@ void editor_execute_command(void) {
             }
 
             /* ── commit buffer: :wq commits, :q aborts ────────────── */
-            if (E.buftabs[E.cur_buftab].is_commit) {
+            if (E.buftabs[E.cur_buftab].kind == BT_COMMIT) {
                 if (dw && dq) {
                     commit_execute();
                 } else if (dq) {
@@ -4200,7 +4165,7 @@ void editor_execute_command(void) {
                         }
                     }
                     editor_quit();
-                } else if (E.buftabs[E.cur_buftab].is_term) {
+                } else if (E.buftabs[E.cur_buftab].kind == BT_TERM) {
                     term_close_buf(E.cur_buftab);
                 } else if (E.num_panes > 1) {
                     /* Multiple panes: close this pane; buffer stays in list. */
@@ -4395,7 +4360,7 @@ void editor_execute_command(void) {
         /* Find existing qf buftab to reopen. */
         int qi = -1;
         for (int i = 0; i < E.num_buftabs; i++)
-            if (E.buftabs[i].is_qf) { qi = i; break; }
+            if (E.buftabs[i].kind == BT_QF) { qi = i; break; }
         if (qi < 0) { status_err("No quickfix results"); goto done; }
         qf_open_pane(E.buftabs[qi].qf);
         goto done;
@@ -5128,7 +5093,7 @@ static void editor_process_normal(int c) {
     }
 
     /* Terminal pane (normal mode): limited commands, i/a resume terminal. */
-    if (E.buftabs[E.cur_buftab].is_term) {
+    if (E.buftabs[E.cur_buftab].kind == BT_TERM) {
         switch (c) {
             case 'i': case 'a': case 'A':
                 E.mode = MODE_INSERT;
@@ -5161,37 +5126,37 @@ static void editor_process_normal(int c) {
     }
 
     /* Tree pane: route all keys to tree handler. */
-    if (E.buftabs[E.cur_buftab].is_tree) {
+    if (E.buftabs[E.cur_buftab].kind == BT_TREE) {
         tree_handle_key(c);
         return;
     }
 
     /* Quickfix pane: route all keys to qf handler. */
-    if (E.buftabs[E.cur_buftab].is_qf) {
+    if (E.buftabs[E.cur_buftab].kind == BT_QF) {
         qf_handle_key(c);
         return;
     }
 
     /* Blame pane: route all keys to blame handler. */
-    if (E.buftabs[E.cur_buftab].is_blame) {
+    if (E.buftabs[E.cur_buftab].kind == BT_BLAME) {
         blame_handle_key(c);
         return;
     }
 
     /* Log pane: route all keys to log handler. */
-    if (E.buftabs[E.cur_buftab].is_log) {
+    if (E.buftabs[E.cur_buftab].kind == BT_LOG) {
         log_handle_key(c);
         return;
     }
 
     /* Revisions pane: route all keys to revisions handler. */
-    if (E.buftabs[E.cur_buftab].is_revisions) {
+    if (E.buftabs[E.cur_buftab].kind == BT_REVISIONS) {
         rev_handle_key(c);
         return;
     }
 
     /* Diff pane (HEAD): read-only, navigation + q to close. */
-    if (E.buftabs[E.cur_buftab].is_diff) {
+    if (E.buftabs[E.cur_buftab].kind == BT_DIFF) {
         if (c == 'q' || c == '\x1b') { diff_close(); return; }
         if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
             E.cy++;
@@ -6222,7 +6187,7 @@ static void handle_mouse_press(void) {
     if (my == p->top + p->height) return;
 
     /* Tree pane: move cursor to clicked row; click on current row activates. */
-    if (E.buftabs[E.panes[E.cur_pane].buf_idx].is_tree) {
+    if (E.buftabs[E.panes[E.cur_pane].buf_idx].kind == BT_TREE) {
         int filerow = (my - p->top) + E.rowoff;
         if (filerow < 0) filerow = 0;
         if (E.buf.numrows > 0 && filerow >= E.buf.numrows)
@@ -6443,7 +6408,7 @@ void editor_process_keypress(void) {
 
     /* Terminal pane in INSERT mode: forward keys to PTY.
        Ctrl-\ (0x1c) escapes back to normal mode for pane nav / commands. */
-    if (E.buftabs[E.panes[E.cur_pane].buf_idx].is_term
+    if (E.buftabs[E.panes[E.cur_pane].buf_idx].kind == BT_TERM
         && E.mode == MODE_INSERT) {
         TermState *ts = E.buftabs[E.panes[E.cur_pane].buf_idx].term;
         if (c == 0x1c || c == '\x1b') {
@@ -6511,7 +6476,7 @@ void editor_process_keypress(void) {
 
 void editor_reap_terminals(void) {
     for (int i = 0; i < E.num_buftabs; i++) {
-        if (E.buftabs[i].is_term && E.buftabs[i].term
+        if (E.buftabs[i].kind == BT_TERM && E.buftabs[i].term
             && E.buftabs[i].term->exited) {
             term_close_buf(i);
             return;  /* indices shifted — restart on next call */

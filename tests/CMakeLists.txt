@@ -32,3 +32,13 @@ add_executable(test_search
 target_include_directories(test_search PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_search PRIVATE unity)
 add_test(NAME search COMMAND test_search)
+
+add_executable(test_syntax
+    test_syntax.c
+    ${CMAKE_SOURCE_DIR}/src/syntax.c
+    ${CMAKE_SOURCE_DIR}/src/buf.c
+    ${CMAKE_SOURCE_DIR}/src/utils.c
+)
+target_include_directories(test_syntax PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_syntax PRIVATE unity)
+add_test(NAME syntax COMMAND test_syntax)

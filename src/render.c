@@ -388,7 +388,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                            int vis_ar, int vis_ac,
                            int bm_valid, int bm_row, int bm_col) {
     /* Terminal pane: render directly from cell grid. */
-    if (E.buftabs[p->buf_idx].is_term) {
+    if (E.buftabs[p->buf_idx].kind == BT_TERM) {
         TermState *ts = E.buftabs[p->buf_idx].term;
         if (!ts) return;
         char mv[24];
@@ -436,14 +436,14 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         return;
     }
 
-    int is_tree      = E.buftabs[p->buf_idx].is_tree;
-    int is_qf        = E.buftabs[p->buf_idx].is_qf;
-    int is_blame     = E.buftabs[p->buf_idx].is_blame;
-    int is_diff      = E.buftabs[p->buf_idx].is_diff;
-    int is_commit    = E.buftabs[p->buf_idx].is_commit;
-    int is_log       = E.buftabs[p->buf_idx].is_log;
-    int is_show      = E.buftabs[p->buf_idx].is_show;
-    int is_rev       = E.buftabs[p->buf_idx].is_revisions;
+    int is_tree      = E.buftabs[p->buf_idx].kind == BT_TREE;
+    int is_qf        = E.buftabs[p->buf_idx].kind == BT_QF;
+    int is_blame     = E.buftabs[p->buf_idx].kind == BT_BLAME;
+    int is_diff      = E.buftabs[p->buf_idx].kind == BT_DIFF;
+    int is_commit    = E.buftabs[p->buf_idx].kind == BT_COMMIT;
+    int is_log       = E.buftabs[p->buf_idx].kind == BT_LOG;
+    int is_show      = E.buftabs[p->buf_idx].kind == BT_SHOW;
+    int is_rev       = E.buftabs[p->buf_idx].kind == BT_REVISIONS;
     int no_gutter    = is_tree || is_qf || is_blame || is_commit || is_log || is_show || is_rev;
     int gw           = no_gutter ? 0 : gutter_width_for(buf, p->buf_idx);
     int has_marks    = no_gutter ? 0 : buf_has_marks(p->buf_idx);
@@ -455,7 +455,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     if (!show_diff_bg) {
         for (int di = 0; di < E.num_panes; di++) {
             BufTab *dbt = &E.buftabs[E.panes[di].buf_idx];
-            if (dbt->is_diff && dbt->diff_source_buf == p->buf_idx) {
+            if (dbt->kind == BT_DIFF && dbt->diff_source_buf == p->buf_idx) {
                 show_diff_bg = 1; break;
             }
         }
@@ -907,7 +907,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Terminal pane: compact status. */
-    if (E.buftabs[p->buf_idx].is_term) {
+    if (E.buftabs[p->buf_idx].kind == BT_TERM) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -929,7 +929,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Quickfix pane: compact status. */
-    if (E.buftabs[p->buf_idx].is_qf) {
+    if (E.buftabs[p->buf_idx].kind == BT_QF) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -951,7 +951,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Blame pane: compact status. */
-    if (E.buftabs[p->buf_idx].is_blame) {
+    if (E.buftabs[p->buf_idx].kind == BT_BLAME) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -972,7 +972,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Diff pane: compact status. */
-    if (E.buftabs[p->buf_idx].is_diff) {
+    if (E.buftabs[p->buf_idx].kind == BT_DIFF) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -991,7 +991,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Commit buffer: status bar. */
-    if (E.buftabs[p->buf_idx].is_commit) {
+    if (E.buftabs[p->buf_idx].kind == BT_COMMIT) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -1010,7 +1010,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Log pane: status bar. */
-    if (E.buftabs[p->buf_idx].is_log) {
+    if (E.buftabs[p->buf_idx].kind == BT_LOG) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -1030,7 +1030,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Git show (commit diff) pane: status bar. */
-    if (E.buftabs[p->buf_idx].is_show) {
+    if (E.buftabs[p->buf_idx].kind == BT_SHOW) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -1049,7 +1049,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Tree pane: special compact status. */
-    if (E.buftabs[p->buf_idx].is_tree) {
+    if (E.buftabs[p->buf_idx].kind == BT_TREE) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -1067,7 +1067,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Revisions pane: compact status bar. */
-    if (E.buftabs[p->buf_idx].is_revisions) {
+    if (E.buftabs[p->buf_idx].kind == BT_REVISIONS) {
         ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
         char erase[16];
         int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
@@ -1355,7 +1355,7 @@ static void draw_global_command_bar(AppendBuf *ab) {
 
     switch (E.mode) {
         case MODE_INSERT:
-            if (E.buftabs[E.panes[E.cur_pane].buf_idx].is_term)
+            if (E.buftabs[E.panes[E.cur_pane].buf_idx].kind == BT_TERM)
                 ab_append(ab, "-- TERMINAL --", 14);
             else
                 ab_append(ab, "-- INSERT --", 12);
@@ -1429,8 +1429,8 @@ static void linked_pane_sync_scroll(void) {
     for (int i = 0; i < E.num_panes; i++) {
         BufTab *bt = &E.buftabs[E.panes[i].buf_idx];
         int src_buf;
-        if (bt->is_blame)     src_buf = bt->blame_source_buf;
-        else if (bt->is_diff) src_buf = bt->diff_source_buf;
+        if (bt->kind == BT_BLAME)     src_buf = bt->blame_source_buf;
+        else if (bt->kind == BT_DIFF) src_buf = bt->diff_source_buf;
         else continue;
         /* Find the source pane. */
         for (int j = 0; j < E.num_panes; j++) {
@@ -1534,7 +1534,7 @@ void editor_refresh_screen(void) {
     if (E.mode == MODE_FUZZY) fuzzy_draw(&ab);
 
     /* Cursor shape: terminal panes use a steady bar. */
-    int is_term_pane = E.buftabs[E.panes[E.cur_pane].buf_idx].is_term;
+    int is_term_pane = E.buftabs[E.panes[E.cur_pane].buf_idx].kind == BT_TERM;
     if (is_term_pane)
         ab_append(&ab, "\x1b[6 q", 5);
     else

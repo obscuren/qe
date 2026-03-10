@@ -320,6 +320,156 @@ void test_save_preserves_empty_lines(void) {
     remove(path);
 }
 
+/* ── col_to_vcol ─────────────────────────────────────────────────────── */
+
+void test_col_to_vcol_no_tabs(void) {
+    buf_insert_row(&buf, 0, "hello", 5);
+    /* No tabs: byte col == visual col */
+    TEST_ASSERT_EQUAL_INT(0, col_to_vcol(&buf.rows[0], 0, 4));
+    TEST_ASSERT_EQUAL_INT(3, col_to_vcol(&buf.rows[0], 3, 4));
+    TEST_ASSERT_EQUAL_INT(5, col_to_vcol(&buf.rows[0], 5, 4));
+}
+
+void test_col_to_vcol_tab_at_col0(void) {
+    buf_insert_row(&buf, 0, "\thello", 6);
+    /* Tab at col 0 with tabwidth 4 → vcol 4 */
+    TEST_ASSERT_EQUAL_INT(4, col_to_vcol(&buf.rows[0], 1, 4));
+}
+
+void test_col_to_vcol_tab_mid_row(void) {
+    /* "ab\tcd": tab at byte 2, aligns to next tabstop at vcol 4 */
+    buf_insert_row(&buf, 0, "ab\tcd", 5);
+    TEST_ASSERT_EQUAL_INT(2, col_to_vcol(&buf.rows[0], 2, 4));
+    TEST_ASSERT_EQUAL_INT(4, col_to_vcol(&buf.rows[0], 3, 4)); /* after tab */
+}
+
+void test_col_to_vcol_multiple_tabs(void) {
+    /* "\t\t": two tabs each width 4 → vcol 8 after col 2 */
+    buf_insert_row(&buf, 0, "\t\t", 2);
+    TEST_ASSERT_EQUAL_INT(8, col_to_vcol(&buf.rows[0], 2, 4));
+}
+
+void test_col_to_vcol_past_end(void) {
+    buf_insert_row(&buf, 0, "abc", 3);
+    /* col == len returns sum without going out of bounds */
+    TEST_ASSERT_EQUAL_INT(3, col_to_vcol(&buf.rows[0], 3, 4));
+}
+
+void test_col_to_vcol_tabwidth8(void) {
+    buf_insert_row(&buf, 0, "\tx", 2);
+    TEST_ASSERT_EQUAL_INT(8, col_to_vcol(&buf.rows[0], 1, 8));
+}
+
+/* ── vcol_to_col ─────────────────────────────────────────────────────── */
+
+void test_vcol_to_col_roundtrip(void) {
+    buf_insert_row(&buf, 0, "ab\tcd", 5);
+    for (int c = 0; c <= 5; c++) {
+        int v = col_to_vcol(&buf.rows[0], c, 4);
+        TEST_ASSERT_EQUAL_INT(c, vcol_to_col(&buf.rows[0], v, 4));
+    }
+}
+
+void test_vcol_to_col_before_tab(void) {
+    /* "ab\t": vcol 1 → col 1 (before the tab) */
+    buf_insert_row(&buf, 0, "ab\t", 3);
+    TEST_ASSERT_EQUAL_INT(1, vcol_to_col(&buf.rows[0], 1, 4));
+}
+
+void test_vcol_to_col_inside_tab_snaps(void) {
+    /* "\thi": vcol 2 is inside the first tab expansion (0-3).
+       vcol_to_col should return col 1 (byte after tab). */
+    buf_insert_row(&buf, 0, "\thi", 3);
+    TEST_ASSERT_EQUAL_INT(1, vcol_to_col(&buf.rows[0], 2, 4));
+}
+
+void test_vcol_to_col_exact_tabstop(void) {
+    buf_insert_row(&buf, 0, "\thi", 3);
+    /* vcol == tabwidth: the tab consumed vcols 0-3, so vcol 4 → col 1 */
+    TEST_ASSERT_EQUAL_INT(1, vcol_to_col(&buf.rows[0], 4, 4));
+}
+
+void test_vcol_to_col_past_end_clamps(void) {
+    buf_insert_row(&buf, 0, "abc", 3);
+    TEST_ASSERT_EQUAL_INT(3, vcol_to_col(&buf.rows[0], 999, 4));
+}
+
+void test_vcol_to_col_no_tabs_identity(void) {
+    buf_insert_row(&buf, 0, "hello", 5);
+    TEST_ASSERT_EQUAL_INT(2, vcol_to_col(&buf.rows[0], 2, 4));
+}
+
+/* ── buf_row_indent ──────────────────────────────────────────────────── */
+
+void test_row_indent_no_indent(void) {
+    buf_insert_row(&buf, 0, "hello", 5);
+    TEST_ASSERT_EQUAL_INT(0, buf_row_indent(&buf.rows[0], 4));
+}
+
+void test_row_indent_spaces(void) {
+    buf_insert_row(&buf, 0, "   x", 4);
+    TEST_ASSERT_EQUAL_INT(3, buf_row_indent(&buf.rows[0], 4));
+}
+
+void test_row_indent_tabs(void) {
+    buf_insert_row(&buf, 0, "\tx", 2);
+    TEST_ASSERT_EQUAL_INT(4, buf_row_indent(&buf.rows[0], 4));
+}
+
+void test_row_indent_mixed(void) {
+    /* " \tx": 1 space + 1 tab (aligns to next stop at 4) = 4 */
+    buf_insert_row(&buf, 0, " \tx", 3);
+    TEST_ASSERT_EQUAL_INT(4, buf_row_indent(&buf.rows[0], 4));
+}
+
+/* ── buf_fold_end ────────────────────────────────────────────────────── */
+
+void test_fold_end_single_row(void) {
+    buf_insert_row(&buf, 0, "only", 4);
+    TEST_ASSERT_EQUAL_INT(0, buf_fold_end(&buf, 0, 4));
+}
+
+void test_fold_end_deeper_block(void) {
+    /* row 0: base; rows 1-2: indented → fold_end == 2 */
+    buf_insert_row(&buf, 0, "if x:", 5);
+    buf_insert_row(&buf, 1, "    a", 5);
+    buf_insert_row(&buf, 2, "    b", 5);
+    buf_insert_row(&buf, 3, "end", 3);
+    TEST_ASSERT_EQUAL_INT(2, buf_fold_end(&buf, 0, 4));
+}
+
+void test_fold_end_includes_blank_lines_inside(void) {
+    /* blank line between indented rows should be included */
+    buf_insert_row(&buf, 0, "if x:", 5);
+    buf_insert_row(&buf, 1, "    a", 5);
+    buf_insert_row(&buf, 2, "",      0);
+    buf_insert_row(&buf, 3, "    b", 5);
+    buf_insert_row(&buf, 4, "end",   3);
+    TEST_ASSERT_EQUAL_INT(3, buf_fold_end(&buf, 0, 4));
+}
+
+void test_fold_end_zero_indent_stops_at_next_nonblank(void) {
+    /* All lines at indent 0: fold covers nothing beyond start */
+    buf_insert_row(&buf, 0, "a", 1);
+    buf_insert_row(&buf, 1, "b", 1);
+    TEST_ASSERT_EQUAL_INT(0, buf_fold_end(&buf, 0, 4));
+}
+
+void test_fold_end_start_is_last_row(void) {
+    buf_insert_row(&buf, 0, "x", 1);
+    buf_insert_row(&buf, 1, "y", 1);
+    TEST_ASSERT_EQUAL_INT(1, buf_fold_end(&buf, 1, 4));
+}
+
+void test_fold_end_nested_deeper_block(void) {
+    /* All three indented rows belong to the outer fold */
+    buf_insert_row(&buf, 0, "outer:",   6);
+    buf_insert_row(&buf, 1, "    mid:", 8);
+    buf_insert_row(&buf, 2, "        deep", 12);
+    buf_insert_row(&buf, 3, "done",    4);
+    TEST_ASSERT_EQUAL_INT(2, buf_fold_end(&buf, 0, 4));
+}
+
 /* ── main ────────────────────────────────────────────────────────────── */
 
 int main(void) {
@@ -377,6 +527,36 @@ int main(void) {
     RUN_TEST(test_save_resets_dirty);
     RUN_TEST(test_save_and_reload);
     RUN_TEST(test_save_preserves_empty_lines);
+
+    /* col_to_vcol */
+    RUN_TEST(test_col_to_vcol_no_tabs);
+    RUN_TEST(test_col_to_vcol_tab_at_col0);
+    RUN_TEST(test_col_to_vcol_tab_mid_row);
+    RUN_TEST(test_col_to_vcol_multiple_tabs);
+    RUN_TEST(test_col_to_vcol_past_end);
+    RUN_TEST(test_col_to_vcol_tabwidth8);
+
+    /* vcol_to_col */
+    RUN_TEST(test_vcol_to_col_roundtrip);
+    RUN_TEST(test_vcol_to_col_before_tab);
+    RUN_TEST(test_vcol_to_col_inside_tab_snaps);
+    RUN_TEST(test_vcol_to_col_exact_tabstop);
+    RUN_TEST(test_vcol_to_col_past_end_clamps);
+    RUN_TEST(test_vcol_to_col_no_tabs_identity);
+
+    /* buf_row_indent */
+    RUN_TEST(test_row_indent_no_indent);
+    RUN_TEST(test_row_indent_spaces);
+    RUN_TEST(test_row_indent_tabs);
+    RUN_TEST(test_row_indent_mixed);
+
+    /* buf_fold_end */
+    RUN_TEST(test_fold_end_single_row);
+    RUN_TEST(test_fold_end_deeper_block);
+    RUN_TEST(test_fold_end_includes_blank_lines_inside);
+    RUN_TEST(test_fold_end_zero_indent_stops_at_next_nonblank);
+    RUN_TEST(test_fold_end_start_is_last_row);
+    RUN_TEST(test_fold_end_nested_deeper_block);
 
     return UNITY_END();
 }

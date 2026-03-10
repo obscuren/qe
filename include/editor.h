@@ -28,6 +28,19 @@ typedef struct {
     int rowoff, coloff; /* saved scroll   (synced from E.* when active)      */
 } Pane;
 
+typedef enum {
+    BT_NORMAL,      /* regular file buffer                */
+    BT_TREE,        /* file-tree sidebar                  */
+    BT_QF,          /* quickfix list                      */
+    BT_BLAME,       /* git blame view                     */
+    BT_DIFF,        /* HEAD diff view                     */
+    BT_COMMIT,      /* git commit message buffer          */
+    BT_SHOW,        /* git-show commit view               */
+    BT_LOG,         /* git log buffer                     */
+    BT_TERM,        /* embedded terminal                  */
+    BT_REVISIONS,   /* local revisions browser            */
+} BufTabKind;
+
 /* Parked state of an inactive buffer (stored while another buffer is live). */
 typedef struct {
     Buffer    buf;
@@ -37,23 +50,15 @@ typedef struct {
     int       pre_insert_dirty;
     int       has_pre_insert;
     const SyntaxDef *syntax;
-    int        is_tree;   /* 1 = this slot holds the file-tree buffer */
-    TreeState *tree;      /* non-NULL when is_tree == 1               */
-    int        is_qf;     /* 1 = this slot holds the quickfix buffer  */
-    QfList    *qf;        /* non-NULL when is_qf == 1                 */
-    int        is_blame;  /* 1 = this slot holds a git blame buffer   */
-    int        blame_source_buf; /* buf_idx of the source file (scroll sync) */
-    int        is_diff;   /* 1 = this slot holds a HEAD diff buffer   */
-    int        diff_source_buf;  /* buf_idx of the working file (scroll sync) */
-    int        is_commit; /* 1 = this slot holds a git commit message buffer */
-    int        is_show;   /* 1 = this slot holds a git-show commit buffer    */
-    int        is_log;    /* 1 = this slot holds the git log buffer          */
-    GitLogEntry *log_entries; /* non-NULL when is_log == 1                   */
+    BufTabKind kind;           /* buffer type discriminator            */
+    TreeState *tree;
+    QfList    *qf;
+    int        blame_source_buf;
+    int        diff_source_buf;
+    GitLogEntry *log_entries;
     int         log_count;
-    int        is_term;   /* 1 = this slot holds an embedded terminal       */
-    TermState *term;      /* non-NULL when is_term == 1                     */
-    int        is_revisions; /* 1 = this slot holds the local revisions browser */
-    int        rev_source_buf; /* buf_idx of the file whose undo tree we show  */
+    TermState *term;
+    int        rev_source_buf;
     int        watch_handle;   /* watch handle: inotify wd on Linux, open file fd on macOS; -1 = none */
     int        file_changed;  /* 1 = external modification detected        */
     int        watch_skip;    /* >0 = ignore next N modify events (our save) */
@@ -62,9 +67,7 @@ typedef struct {
 /* True for any non-content buffer (tree, quickfix, git viewers, terminal…).
    Use this to skip special buffers in :ls, :bn/:bp, fuzzy picker, dirty checks, etc. */
 static inline int buftab_is_special(const BufTab *bt) {
-    return bt->is_tree || bt->is_qf || bt->is_blame || bt->is_diff
-        || bt->is_commit || bt->is_show || bt->is_log || bt->is_term
-        || bt->is_revisions;
+    return bt->kind != BT_NORMAL;
 }
 
 typedef enum {

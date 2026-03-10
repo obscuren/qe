@@ -130,18 +130,10 @@ void editor_update_git_signs(void) {
     E.buf.git_signs_count = 0;
     if (!E.buf.filename || E.buf.numrows <= 0) return;
 
-    /* Build temporary arrays for the git module. */
-    const char **chars = malloc(sizeof(char *) * E.buf.numrows);
-    int         *lens  = malloc(sizeof(int)    * E.buf.numrows);
-    if (!chars || !lens) { free(chars); free(lens); return; }
-    for (int i = 0; i < E.buf.numrows; i++) {
-        chars[i] = E.buf.rows[i].chars;
-        lens[i]  = E.buf.rows[i].len;
-    }
-    E.buf.git_signs = git_diff_signs(E.buf.filename, chars, lens, E.buf.numrows);
+    GitLines gl = git_lines_from_buf(&E.buf);
+    E.buf.git_signs = git_diff_signs(E.buf.filename, &gl);
     E.buf.git_signs_count = E.buf.git_signs ? E.buf.numrows : 0;
-    free(chars);
-    free(lens);
+    git_lines_free(&gl);
 }
 
 UndoState editor_capture_state(void) {
@@ -252,7 +244,7 @@ void editor_handle_resize(void) {
 
 void editor_drain_terminals(void) {
     for (int i = 0; i < E.num_buftabs; i++) {
-        if (!E.buftabs[i].is_term || !E.buftabs[i].term) continue;
+        if (E.buftabs[i].kind != BT_TERM || !E.buftabs[i].term) continue;
         TermState *ts = E.buftabs[i].term;
         for (int pi = 0; pi < E.num_panes; pi++) {
             if (E.panes[pi].buf_idx == i) {
@@ -276,7 +268,7 @@ int editor_poll_for_input(void) {
         pfds[nfds++] = (struct pollfd){ .fd = E.file_watch_fd, .events = POLLIN };
     }
     for (int i = 0; i < E.num_buftabs; i++) {
-        if (E.buftabs[i].is_term && E.buftabs[i].term
+        if (E.buftabs[i].kind == BT_TERM && E.buftabs[i].term
             && E.buftabs[i].term->pty_fd >= 0)
             pfds[nfds++] = (struct pollfd){
                 .fd = E.buftabs[i].term->pty_fd, .events = POLLIN };

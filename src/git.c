@@ -6,6 +6,23 @@
 #include <string.h>
 #include <unistd.h>
 
+GitLines git_lines_from_buf(const Buffer *b) {
+    GitLines gl = { NULL, NULL, b->numrows };
+    int n = b->numrows > 0 ? b->numrows : 1;
+    gl.chars = malloc(sizeof(char *) * n);
+    gl.lens  = malloc(sizeof(int)    * n);
+    for (int i = 0; i < b->numrows; i++) {
+        gl.chars[i] = b->rows[i].chars;
+        gl.lens[i]  = b->rows[i].len;
+    }
+    return gl;
+}
+
+void git_lines_free(GitLines *gl) {
+    free(gl->chars); gl->chars = NULL;
+    free(gl->lens);  gl->lens  = NULL;
+}
+
 /* ── Branch name ─────────────────────────────────────────────────────── */
 
 /* Walk up from cwd to find the .git directory.  Returns 1 and fills
@@ -167,16 +184,15 @@ static void apply_hunks_both(FILE *fp,
     }
 }
 
-char *git_diff_signs(const char *filename, const char *const *row_chars,
-                     const int *row_lens, int numrows) {
-    if (!filename || numrows <= 0) return NULL;
+char *git_diff_signs(const char *filename, const GitLines *lines) {
+    if (!filename || lines->count <= 0) return NULL;
 
     /* Write buffer content to a temp file. */
     char tmppath[] = "/tmp/qe_git_XXXXXX";
     int fd = mkstemp(tmppath);
     if (fd < 0) return NULL;
-    for (int i = 0; i < numrows; i++) {
-        if (row_lens[i] > 0) write(fd, row_chars[i], row_lens[i]);
+    for (int i = 0; i < lines->count; i++) {
+        if (lines->lens[i] > 0) write(fd, lines->chars[i], lines->lens[i]);
         write(fd, "\n", 1);
     }
     close(fd);
@@ -196,11 +212,11 @@ char *git_diff_signs(const char *filename, const char *const *row_chars,
     FILE *fp = popen(cmd, "r");
     if (!fp) { unlink(tmppath); return NULL; }
 
-    char *signs = malloc(numrows);
+    char *signs = malloc(lines->count);
     if (!signs) { pclose(fp); unlink(tmppath); return NULL; }
-    memset(signs, GIT_SIGN_NONE, numrows);
+    memset(signs, GIT_SIGN_NONE, lines->count);
 
-    apply_hunks(fp, signs, numrows);
+    apply_hunks(fp, signs, lines->count);
 
     pclose(fp);
     unlink(tmppath);
@@ -208,14 +224,12 @@ char *git_diff_signs(const char *filename, const char *const *row_chars,
 }
 
 void git_diff_signs_both(const char *filename,
-                         const char *const *new_chars, const int *new_lens,
-                         int new_numrows,
-                         const char *const *old_chars, const int *old_lens,
-                         int old_numrows,
+                         const GitLines *new_lines,
+                         const GitLines *old_lines,
                          char **out_new_signs, char **out_old_signs) {
     *out_new_signs = NULL;
     *out_old_signs = NULL;
-    if (!filename || new_numrows <= 0 || old_numrows <= 0) return;
+    if (!filename || new_lines->count <= 0 || old_lines->count <= 0) return;
 
     /* Write both versions to temp files. */
     char tmp_new[] = "/tmp/qe_dnew_XXXXXX";
@@ -227,13 +241,13 @@ void git_diff_signs_both(const char *filename,
         if (fd_old >= 0) { close(fd_old); unlink(tmp_old); }
         return;
     }
-    for (int i = 0; i < old_numrows; i++) {
-        if (old_lens[i] > 0) write(fd_old, old_chars[i], old_lens[i]);
+    for (int i = 0; i < old_lines->count; i++) {
+        if (old_lines->lens[i] > 0) write(fd_old, old_lines->chars[i], old_lines->lens[i]);
         write(fd_old, "\n", 1);
     }
     close(fd_old);
-    for (int i = 0; i < new_numrows; i++) {
-        if (new_lens[i] > 0) write(fd_new, new_chars[i], new_lens[i]);
+    for (int i = 0; i < new_lines->count; i++) {
+        if (new_lines->lens[i] > 0) write(fd_new, new_lines->chars[i], new_lines->lens[i]);
         write(fd_new, "\n", 1);
     }
     close(fd_new);
@@ -248,13 +262,13 @@ void git_diff_signs_both(const char *filename,
     FILE *fp = popen(cmd, "r");
     if (!fp) { unlink(tmp_old); unlink(tmp_new); return; }
 
-    char *ns = malloc(new_numrows);
-    char *os = malloc(old_numrows);
+    char *ns = malloc(new_lines->count);
+    char *os = malloc(old_lines->count);
     if (!ns || !os) { free(ns); free(os); pclose(fp); unlink(tmp_old); unlink(tmp_new); return; }
-    memset(ns, GIT_SIGN_NONE, new_numrows);
-    memset(os, GIT_SIGN_NONE, old_numrows);
+    memset(ns, GIT_SIGN_NONE, new_lines->count);
+    memset(os, GIT_SIGN_NONE, old_lines->count);
 
-    apply_hunks_both(fp, os, old_numrows, ns, new_numrows);
+    apply_hunks_both(fp, os, old_lines->count, ns, new_lines->count);
 
     pclose(fp);
     unlink(tmp_old);
@@ -409,15 +423,14 @@ static int write_head_to_tmp(const char *filename, char *path, int pathlen) {
     return (rc == 0) ? 0 : -1;
 }
 
-DiffHunk *git_get_hunks(const char *filename,
-                        const char *const *row_chars, const int *row_lens,
-                        int numrows, int *out_count) {
+DiffHunk *git_get_hunks(const char *filename, const GitLines *lines,
+                        int *out_count) {
     *out_count = 0;
-    if (!filename || numrows <= 0) return NULL;
+    if (!filename || lines->count <= 0) return NULL;
 
     char tmp_new[64] = "/tmp/qe_hnew_XXXXXX";
     char tmp_old[64];
-    if (write_buf_to_tmp(tmp_new, row_chars, row_lens, numrows,
+    if (write_buf_to_tmp(tmp_new, lines->chars, lines->lens, lines->count,
                          tmp_new, sizeof(tmp_new)) < 0)
         return NULL;
     if (write_head_to_tmp(filename, tmp_old, sizeof(tmp_old)) < 0) {
@@ -461,15 +474,13 @@ DiffHunk *git_get_hunks(const char *filename,
     return hunks;
 }
 
-int git_stage_hunk(const char *filename,
-                   const char *const *row_chars, const int *row_lens,
-                   int numrows, int hunk_idx) {
-    if (!filename || numrows <= 0) return 0;
+int git_stage_hunk(const char *filename, const GitLines *lines, int hunk_idx) {
+    if (!filename || lines->count <= 0) return 0;
 
     /* Write buffer and HEAD to temp files. */
     char tmp_new[64] = "/tmp/qe_snew_XXXXXX";
     char tmp_old[64];
-    if (write_buf_to_tmp(tmp_new, row_chars, row_lens, numrows,
+    if (write_buf_to_tmp(tmp_new, lines->chars, lines->lens, lines->count,
                          tmp_new, sizeof(tmp_new)) < 0)
         return 0;
     if (write_head_to_tmp(filename, tmp_old, sizeof(tmp_old)) < 0) {

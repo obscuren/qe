@@ -8,12 +8,24 @@
 #define GIT_SIGN_MOD   '~'
 #define GIT_SIGN_DEL   '-'   /* deletion: placed on the line above (or line 0) */
 
+#include "buf.h"
+
+/* Bundle of in-memory buffer row data passed to git functions.
+   Build with git_lines_from_buf(); release with git_lines_free(). */
+typedef struct {
+    const char **chars;   /* row text pointers (malloc'd array) */
+    int         *lens;    /* row lengths      (malloc'd array) */
+    int          count;   /* number of rows                    */
+} GitLines;
+
+GitLines git_lines_from_buf(const Buffer *b);
+void     git_lines_free(GitLines *gl);
+
 /* Compute per-line diff signs for a buffer against its HEAD version.
    Writes the buffer rows to a temp file and diffs against git show HEAD:filename.
-   Returns a malloc'd array of `numrows` chars, or NULL on error / not in git.
+   Returns a malloc'd array of `count` chars, or NULL on error / not in git.
    Caller must free() the result. */
-char *git_diff_signs(const char *filename, const char *const *row_chars,
-                     const int *row_lens, int numrows);
+char *git_diff_signs(const char *filename, const GitLines *lines);
 
 /* Read the current branch name into out[outlen].
    For detached HEAD, writes the short SHA.  Returns 1 on success, 0 if not a git repo. */
@@ -23,10 +35,8 @@ int git_current_branch(char *out, int outlen);
    Writes both to temp files, diffs them, and fills both sign arrays.
    Caller must free both *out_new_signs and *out_old_signs. */
 void git_diff_signs_both(const char *filename,
-                         const char *const *new_chars, const int *new_lens,
-                         int new_numrows,
-                         const char *const *old_chars, const int *old_lens,
-                         int old_numrows,
+                         const GitLines *new_lines,
+                         const GitLines *old_lines,
                          char **out_new_signs, char **out_old_signs);
 
 /* Retrieve the HEAD version of a file via `git show HEAD:<filename>`.
@@ -70,16 +80,13 @@ typedef struct {
 /* Get all diff hunks between HEAD and the in-memory buffer.
    Returns malloc'd array of DiffHunk; caller must free().
    Sets *out_count.  Returns NULL on error or no diff. */
-DiffHunk *git_get_hunks(const char *filename,
-                        const char *const *row_chars, const int *row_lens,
-                        int numrows, int *out_count);
+DiffHunk *git_get_hunks(const char *filename, const GitLines *lines,
+                        int *out_count);
 
 /* Stage (add to index) a single hunk from the buffer.
    hunk_idx is an index into the array returned by git_get_hunks.
    Returns 1 on success, 0 on failure. */
-int git_stage_hunk(const char *filename,
-                   const char *const *row_chars, const int *row_lens,
-                   int numrows, int hunk_idx);
+int git_stage_hunk(const char *filename, const GitLines *lines, int hunk_idx);
 
 /* A single git log entry. */
 typedef struct {
