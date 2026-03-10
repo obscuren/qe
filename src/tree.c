@@ -150,15 +150,8 @@ void tree_update_git_status(TreeState *ts) {
 
 void tree_render_to_buf(const TreeState *ts, Buffer *buf) {
     /* Free all existing rows but preserve filename. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows          = NULL;
-    buf->numrows       = 0;
-    buf->dirty         = 0;
-    buf->hl_dirty_from = 2147483647; /* INT_MAX without including limits.h */
+    buf_clear_rows(buf);
+    buf->dirty = 0;
 
     /* Root line: ▾ dirname/  (▾ = U+25BE = \xe2\x96\xbe) */
     const char *rname = strrchr(ts->root, '/');

@@ -97,14 +97,7 @@ void qf_run(QfList *ql, const char *pattern, const char *path) {
 
 void qf_render_to_buf(QfList *ql, Buffer *buf) {
     /* Clear existing rows. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows    = NULL;
-    buf->numrows = 0;
-    buf->hl_dirty_from = 0x7fffffff;
+    buf_clear_rows(buf);
 
     /* One plain-text row per entry (used for navigation / cursor clamping).
        Visual rendering is overridden in draw_pane_rows with colours. */
