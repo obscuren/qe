@@ -59,6 +59,7 @@ void filewatcher_add(int buftab_idx) {
     }
     /* fd is now owned by kqueue; released via filewatcher_remove() */
     bt->watch_handle = fd;
+    bt->watch_skip   = 2;   /* skip up to 2 spurious NOTE_WRITE events on macOS/APFS */
 #endif
     bt->file_changed = 0;
 }

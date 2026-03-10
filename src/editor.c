@@ -111,6 +111,7 @@ void editor_init(void) {
 
     E.num_buftabs = 1;
     E.cur_buftab  = 0;
+    for (int i = 0; i < MAX_BUFS; i++) E.buftabs[i].watch_handle = -1;
 
     E.git_branch[0]    = '\0';
     E.pending_bracket  = 0;
