@@ -4585,6 +4585,14 @@ void editor_execute_command(void) {
         E.opts.line_numbers = 0;
         status_msg("Line numbers off");
 
+    } else if (strcmp(cmd, "set rnu") == 0) {
+        E.opts.relative_line_numbers = 1;
+        status_msg("Relative line numbers on");
+
+    } else if (strcmp(cmd, "set nornu") == 0) {
+        E.opts.relative_line_numbers = 0;
+        status_msg("Relative line numbers off");
+
     /* ── :mksession [file] ────────────────────────────────────────── */
     } else if (strncmp(cmd, "mksession", 9) == 0 &&
                (cmd[9] == '\0' || cmd[9] == ' ')) {
