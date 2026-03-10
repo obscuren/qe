@@ -238,6 +238,7 @@ typedef struct {
     char git_branch[64];    /* current branch name (empty if not a git repo) */
     int  pending_bracket;   /* ']' or '[' waiting for second key, 0 = none  */
     int  pending_leader_h;  /* 1 = <leader>h pressed, waiting for s/r       */
+    int  pending_leader_g;  /* 1 = <leader>g pressed, waiting for b/l/d/c   */
 
     /* File watching (inotify on Linux, kqueue on macOS) */
     int  file_watch_fd;     /* file watching fd (inotify on Linux, kqueue on macOS), -1 = disabled */
