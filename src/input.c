@@ -1848,6 +1848,12 @@ static void tree_handle_key(int c) {
     }
 }
 
+static int find_pane_by_kind(BufTabKind kind) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].kind == kind) return i;
+    return -1;
+}
+
 /* Open the file-tree sidebar (or close it if already open). */
 static void editor_open_tree_pane(void) {
     /* Check if a tree pane is already open — toggle it closed. */
@@ -1999,14 +2005,10 @@ void editor_open_fuzzy(void) {
 
 #define BLAME_WIDTH 40
 
-static int blame_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_BLAME) return i;
-    return -1;
-}
+
 
 static void blame_close(void) {
-    int bpi = blame_pane_idx();
+    int bpi = find_pane_by_kind(BT_BLAME);
     if (bpi < 0) return;
 
     Pane *bp = &E.panes[bpi];
@@ -2063,7 +2065,7 @@ static void blame_close(void) {
 
 static void blame_open(void) {
     /* Toggle off if already open. */
-    if (blame_pane_idx() >= 0) { blame_close(); return; }
+    if (find_pane_by_kind(BT_BLAME) >= 0) { blame_close(); return; }
 
     if (!E.buf.filename) { status_err("No filename"); return; }
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
@@ -2145,7 +2147,7 @@ static void blame_open(void) {
 static void blame_handle_key(int c) {
     if (c == 'q' || c == '\x1b') { blame_close(); return; }
 
-    int bpi = blame_pane_idx();
+    int bpi = find_pane_by_kind(BT_BLAME);
     if (bpi < 0) return;
     int src_buf = E.buftabs[E.panes[bpi].buf_idx].blame_source_buf;
 
@@ -2169,14 +2171,10 @@ static void blame_handle_key(int c) {
 
 /* ── Git log pane ────────────────────────────────────────────────────── */
 
-static int log_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_LOG) return i;
-    return -1;
-}
+
 
 static void log_close(void) {
-    int lpi = log_pane_idx();
+    int lpi = find_pane_by_kind(BT_LOG);
     if (lpi < 0) return;
 
     Pane *lp = &E.panes[lpi];
@@ -2231,7 +2229,7 @@ static void log_close(void) {
 }
 
 static void log_open(void) {
-    if (log_pane_idx() >= 0) { log_close(); return; }
+    if (find_pane_by_kind(BT_LOG) >= 0) { log_close(); return; }
 
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
@@ -2511,14 +2509,10 @@ static void commit_execute(void) {
 
 /* ── Diff pane (HEAD vs working copy) ────────────────────────────────── */
 
-static int diff_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_DIFF) return i;
-    return -1;
-}
+
 
 static void diff_close(void) {
-    int dpi = diff_pane_idx();
+    int dpi = find_pane_by_kind(BT_DIFF);
     if (dpi < 0) return;
 
     Pane *dp = &E.panes[dpi];
@@ -2575,7 +2569,7 @@ static void diff_close(void) {
 
 static void diff_open(void) {
     /* Toggle off if already open. */
-    if (diff_pane_idx() >= 0) { diff_close(); return; }
+    if (find_pane_by_kind(BT_DIFF) >= 0) { diff_close(); return; }
 
     if (!E.buf.filename) { status_err("No filename"); return; }
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
@@ -2781,15 +2775,11 @@ static void hunk_revert(void) {
 
 /* ── Quickfix pane ───────────────────────────────────────────────────── */
 
-static int qf_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_QF) return i;
-    return -1;
-}
+
 
 /* Jump to the selected quickfix entry in the last content pane. */
 static void qf_jump(int idx) {
-    int qpi = qf_pane_idx();
+    int qpi = find_pane_by_kind(BT_QF);
     if (qpi < 0) return;
     QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
     if (!ql || idx < 0 || idx >= ql->count) return;
@@ -2844,7 +2834,7 @@ static void qf_jump(int idx) {
 }
 
 static void qf_close_pane(void) {
-    int qpi = qf_pane_idx();
+    int qpi = find_pane_by_kind(BT_QF);
     if (qpi < 0) return;
 
     int qf_top    = E.panes[qpi].top;
@@ -2917,7 +2907,7 @@ static void qf_close_pane(void) {
 
 static void qf_open_pane(QfList *ql) {
     /* Close existing qf pane first (replace with new results). */
-    if (qf_pane_idx() >= 0) qf_close_pane();
+    if (find_pane_by_kind(BT_QF) >= 0) qf_close_pane();
 
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
@@ -2973,7 +2963,7 @@ static void qf_open_pane(QfList *ql) {
 }
 
 static void qf_handle_key(int c) {
-    int qpi = qf_pane_idx();
+    int qpi = find_pane_by_kind(BT_QF);
     if (qpi < 0) return;
     QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
 
@@ -2997,11 +2987,7 @@ static UndoState rev_saved_state;
 static int       rev_saved_valid;
 static int       rev_saved_src_buf;  /* buftab index of the source buffer */
 
-static int rev_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_REVISIONS) return i;
-    return -1;
-}
+
 
 /* Render the undo tree into buffer rows for display.
    Format: indented tree with markers for current node and branch points.
@@ -3151,7 +3137,7 @@ static void rev_restore_original(void) {
 }
 
 static void rev_activate_entry(void) {
-    int rpi = rev_pane_idx();
+    int rpi = find_pane_by_kind(BT_REVISIONS);
     if (rpi < 0) return;
 
     BufTab *rbt = &E.buftabs[E.panes[rpi].buf_idx];
@@ -3186,7 +3172,7 @@ static void rev_activate_entry(void) {
 }
 
 static void rev_close_pane(void) {
-    int rpi = rev_pane_idx();
+    int rpi = find_pane_by_kind(BT_REVISIONS);
     if (rpi < 0) return;
 
     int buf_idx    = E.panes[rpi].buf_idx;
@@ -3261,7 +3247,7 @@ static void rev_close_pane(void) {
 
 static void rev_open_pane(void) {
     /* Close existing revisions pane if open (toggle). */
-    if (rev_pane_idx() >= 0) { rev_close_pane(); return; }
+    if (find_pane_by_kind(BT_REVISIONS) >= 0) { rev_close_pane(); return; }
 
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
@@ -3371,7 +3357,7 @@ static void rev_open_pane(void) {
 }
 
 static void rev_handle_key(int c) {
-    int rpi = rev_pane_idx();
+    int rpi = find_pane_by_kind(BT_REVISIONS);
     if (rpi < 0) return;
 
     if (c == 'q' || c == '\x1b') { rev_close_pane(); return; }
@@ -4239,7 +4225,7 @@ void editor_execute_command(void) {
 
     /* ── :copen ─────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "copen") == 0) {
-        if (qf_pane_idx() >= 0) { status_err("Quickfix already open"); goto done; }
+        if (find_pane_by_kind(BT_QF) >= 0) { status_err("Quickfix already open"); goto done; }
         /* Find existing qf buftab to reopen. */
         int qi = -1;
         for (int i = 0; i < E.num_buftabs; i++)
@@ -4250,13 +4236,13 @@ void editor_execute_command(void) {
 
     /* ── :cclose ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "cclose") == 0 || strcmp(cmd, "ccl") == 0) {
-        if (qf_pane_idx() < 0) { status_err("No quickfix pane"); goto done; }
+        if (find_pane_by_kind(BT_QF) < 0) { status_err("No quickfix pane"); goto done; }
         qf_close_pane();
         goto done;
 
     /* ── :cn / :cp ──────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "cn") == 0 || strcmp(cmd, "cnext") == 0) {
-        int qpi = qf_pane_idx();
+        int qpi = find_pane_by_kind(BT_QF);
         if (qpi < 0) { status_err("No quickfix list"); goto done; }
         QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
         if (ql && ql->selected < ql->count - 1) qf_jump(ql->selected + 1);
@@ -4264,7 +4250,7 @@ void editor_execute_command(void) {
         goto done;
 
     } else if (strcmp(cmd, "cp") == 0 || strcmp(cmd, "cprev") == 0) {
-        int qpi = qf_pane_idx();
+        int qpi = find_pane_by_kind(BT_QF);
         if (qpi < 0) { status_err("No quickfix list"); goto done; }
         QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
         if (ql && ql->selected > 0) qf_jump(ql->selected - 1);
