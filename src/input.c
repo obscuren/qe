@@ -1922,7 +1922,7 @@ static void editor_open_tree_pane(void) {
 
     /* Allocate a new buftab for the tree buffer. */
     int tidx = E.num_buftabs++;
-    memset(&E.buftabs[tidx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[tidx]);
     E.buftabs[tidx].kind = BT_TREE;
     E.buftabs[tidx].tree    = malloc(sizeof(TreeState));
     if (!E.buftabs[tidx].tree) { E.num_buftabs--; status_err("Out of memory"); return; }
@@ -2039,7 +2039,7 @@ static void blame_close(void) {
         pane_save_cursor();
         buf_free(&E.buftabs[buf_idx].buf);
     }
-    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[buf_idx]);
 
     /* Remove blame pane. */
     for (int i = bpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
@@ -2093,7 +2093,7 @@ static void blame_open(void) {
 
     /* Allocate blame buftab. */
     int bidx = E.num_buftabs++;
-    memset(&E.buftabs[bidx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[bidx]);
     E.buftabs[bidx].kind = BT_BLAME;
     E.buftabs[bidx].blame_source_buf = E.cur_buftab;
     buf_init(&E.buftabs[bidx].buf);
@@ -2211,7 +2211,7 @@ static void log_close(void) {
     } else {
         buf_free(&E.buftabs[buf_idx].buf);
     }
-    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[buf_idx]);
 
     /* Remove pane. */
     for (int i = lpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
@@ -2253,7 +2253,7 @@ static void log_open(void) {
 
     /* Allocate log buftab. */
     int lidx = E.num_buftabs++;
-    memset(&E.buftabs[lidx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[lidx]);
     E.buftabs[lidx].kind = BT_LOG;
     E.buftabs[lidx].log_entries = entries;
     E.buftabs[lidx].log_count   = log_count;
@@ -2326,7 +2326,7 @@ static void log_show_commit(const char *hash) {
 
     /* Create a new buffer for the commit. */
     int cidx = E.num_buftabs++;
-    memset(&E.buftabs[cidx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[cidx]);
     buf_init(&E.buftabs[cidx].buf);
 
     for (int i = 0; i < line_count; i++) {
@@ -2409,7 +2409,7 @@ static void commit_open(void) {
 
     /* Allocate commit buftab. */
     int cidx = E.num_buftabs++;
-    memset(&E.buftabs[cidx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[cidx]);
     E.buftabs[cidx].kind = BT_COMMIT;
     buf_init(&E.buftabs[cidx].buf);
 
@@ -2495,7 +2495,7 @@ static void commit_execute(void) {
         free(E.buf.git_signs);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
-        memset(&E.buftabs[E.cur_buftab], 0, sizeof(BufTab));
+        buftab_reset(&E.buftabs[E.cur_buftab]);
 
         /* Switch back to previous buffer (buftab 0 as fallback). */
         int prev = 0;
@@ -2563,7 +2563,7 @@ static void diff_close(void) {
     } else {
         buf_free(&E.buftabs[buf_idx].buf);
     }
-    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[buf_idx]);
 
     /* Remove diff pane. */
     for (int i = dpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
@@ -2616,7 +2616,7 @@ static void diff_open(void) {
 
     /* Allocate diff buftab. */
     int didx = E.num_buftabs++;
-    memset(&E.buftabs[didx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[didx]);
     E.buftabs[didx].kind = BT_DIFF;
     E.buftabs[didx].diff_source_buf = E.cur_buftab;
     E.buftabs[didx].syntax = syntax_detect(E.buf.filename);
@@ -2907,7 +2907,7 @@ static void qf_close_pane(void) {
 
     QfList *ql = E.buftabs[buf_idx].qf;
     if (ql) { qf_free(ql); free(ql); }
-    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[buf_idx]);
     /* No buftab compaction — all other pane buf_idx values remain valid. */
 
     /* Remove the qf pane from the array. */
@@ -2962,7 +2962,7 @@ static void qf_open_pane(QfList *ql) {
 
     /* Allocate buftab for qf buffer. */
     int qidx = E.num_buftabs++;
-    memset(&E.buftabs[qidx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[qidx]);
     E.buftabs[qidx].kind = BT_QF;
     E.buftabs[qidx].qf    = ql;
 
@@ -3273,7 +3273,7 @@ static void rev_close_pane(void) {
         buf_free(&E.buftabs[buf_idx].buf);
     }
 
-    memset(&E.buftabs[buf_idx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[buf_idx]);
 
     /* Remove pane. */
     for (int i = rpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
@@ -3342,7 +3342,7 @@ static void rev_open_pane(void) {
 
     /* Allocate buftab for revisions buffer. */
     int ridx = E.num_buftabs++;
-    memset(&E.buftabs[ridx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[ridx]);
     E.buftabs[ridx].kind = BT_REVISIONS;
     E.buftabs[ridx].rev_source_buf = src_buf;
 
@@ -3592,8 +3592,7 @@ static int open_new_buf(const char *filename) {
         return 0;
     }
     int idx = E.num_buftabs++;
-    memset(&E.buftabs[idx], 0, sizeof(BufTab));
-    E.buftabs[idx].watch_handle = -1;
+    buftab_reset(&E.buftabs[idx]);
     switch_to_buf(idx);   /* saves current, clears transient, activates new slot */
     buf_init(&E.buf);
     if (filename) {
@@ -3629,7 +3628,7 @@ static void term_close_buf(int bi) {
         buf_free(&E.buftabs[closing_buf].buf);
         for (int si = closing_buf; si < E.num_buftabs - 1; si++)
             E.buftabs[si] = E.buftabs[si + 1];
-        memset(&E.buftabs[E.num_buftabs - 1], 0, sizeof(BufTab));
+        buftab_reset(&E.buftabs[E.num_buftabs - 1]);
         E.num_buftabs--;
         for (int pi = 0; pi < E.num_panes; pi++)
             if (E.panes[pi].buf_idx > closing_buf)
@@ -3668,7 +3667,7 @@ static void editor_open_terminal(const char *cmd) {
 
     /* Allocate new buffer slot. */
     int idx = E.num_buftabs++;
-    memset(&E.buftabs[idx], 0, sizeof(BufTab));
+    buftab_reset(&E.buftabs[idx]);
 
     /* Activate the new bottom pane and assign the terminal buffer. */
     int new_pane = E.cur_pane + 1;
@@ -3695,74 +3694,6 @@ static void editor_open_terminal(const char *cmd) {
     E.buftabs[idx].kind = BT_TERM;
     E.buftabs[idx].term = ts;
     E.mode = MODE_INSERT;  /* start in terminal-insert (keys go to PTY) */
-}
-
-/* Close the current buffer.  force=0 guards against unsaved changes.
-   Returns 1 if the editor should quit (last buffer was closed). */
-static int close_cur_buf(int force) {
-    if (!force && E.buf.dirty && !buftab_is_special(&E.buftabs[E.cur_buftab])) {
-        status_err("Unsaved changes (use :q! to override)");
-        return 0;
-    }
-
-    /* Count content buffers that would remain after this close. */
-    int remaining = 0;
-    for (int i = 0; i < E.num_buftabs; i++) {
-        if (i != E.cur_buftab && !buftab_is_special(&E.buftabs[i]))
-            remaining++;
-    }
-    if (remaining == 0)
-        return 1;   /* last content buffer — tell caller to quit */
-
-    /* Free current live resources. */
-    if (E.buftabs[E.cur_buftab].kind == BT_TERM) {
-        term_emu_close(E.buftabs[E.cur_buftab].term);
-        E.buftabs[E.cur_buftab].term = NULL;
-    }
-    buf_free(&E.buf);
-    undo_tree_free(&E.undo_tree);
-    if (E.has_pre_insert) {
-        undo_state_free(&E.pre_insert_snapshot);
-        E.has_pre_insert = 0;
-    }
-    la_free();
-    insert_rec_reset();
-    completion_free();
-    E.pending_op = '\0';
-    E.count      = 0;
-
-    /* Remove cur_buftab slot from the parked array by shifting. */
-    int cur = E.cur_buftab;
-    for (int i = cur; i < E.num_buftabs - 1; i++)
-        E.buftabs[i] = E.buftabs[i + 1];
-    memset(&E.buftabs[E.num_buftabs - 1], 0, sizeof(BufTab));
-    E.num_buftabs--;
-
-    /* Update all pane buf_idx values after the shift. */
-    for (int i = 0; i < E.num_panes; i++) {
-        if (E.panes[i].buf_idx > cur)
-            E.panes[i].buf_idx--;
-        else if (E.panes[i].buf_idx == cur)
-            E.panes[i].buf_idx = -1;   /* will be fixed to next below */
-    }
-
-    /* Pick next content buffer (prefer forward, then backward). */
-    int next = -1;
-    for (int i = cur; i < E.num_buftabs && next < 0; i++)
-        if (!buftab_is_special(&E.buftabs[i])) next = i;
-    for (int i = cur - 1; i >= 0 && next < 0; i--)
-        if (!buftab_is_special(&E.buftabs[i])) next = i;
-    if (next < 0) next = (cur < E.num_buftabs) ? cur : E.num_buftabs - 1;
-
-    /* Redirect any panes that were showing the closed buffer. */
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.panes[i].buf_idx == -1) E.panes[i].buf_idx = next;
-
-    E.cur_buftab = next;
-    E.panes[E.cur_pane].buf_idx = next;
-    editor_buf_restore(next);
-    E.mode = MODE_NORMAL;
-    return 0;
 }
 
 /* ── Session save / restore ──────────────────────────────────────────── */
@@ -4041,7 +3972,7 @@ void editor_execute_command(void) {
                     free(E.buf.git_signs);
                     memset(&E.buf, 0, sizeof(Buffer));
                     E.buf.hl_dirty_from = INT_MAX;
-                    memset(&E.buftabs[E.cur_buftab], 0, sizeof(BufTab));
+                    buftab_reset(&E.buftabs[E.cur_buftab]);
                     int prev = 0;
                     for (int i = E.num_buftabs - 1; i >= 0; i--) {
                         if (i != E.cur_buftab && (E.buftabs[i].buf.rows ||
@@ -4390,7 +4321,7 @@ void editor_execute_command(void) {
     } else if (strcmp(cmd, "registers") == 0 || strcmp(cmd, "reg") == 0) {
         if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); goto done; }
         int ridx = E.num_buftabs++;
-        memset(&E.buftabs[ridx], 0, sizeof(BufTab));
+        buftab_reset(&E.buftabs[ridx]);
         buf_init(&E.buftabs[ridx].buf);
         Buffer *rb = &E.buftabs[ridx].buf;
         const char *hdr = "--- Registers ---";

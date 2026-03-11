@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "git.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,21 +84,6 @@ int git_current_branch(char *out, int outlen) {
 }
 
 /* ── Diff signs ──────────────────────────────────────────────────────── */
-
-/* Shell-quote s into out[outlen] with single quotes. */
-static void shell_quote(const char *s, char *out, int outlen) {
-    int j = 0;
-    if (j < outlen - 1) out[j++] = '\'';
-    for (int i = 0; s[i] && j < outlen - 5; i++) {
-        if (s[i] == '\'') {
-            out[j++] = '\''; out[j++] = '\\'; out[j++] = '\''; out[j++] = '\'';
-        } else {
-            out[j++] = s[i];
-        }
-    }
-    if (j < outlen - 1) out[j++] = '\'';
-    out[j] = '\0';
-}
 
 /* Parse a hunk header line: "@@ -old_start[,old_count] +new_start[,new_count] @@"
    Returns 1 on success. */

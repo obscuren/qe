@@ -1,25 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "qf.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* Wrap s in single quotes for safe shell use; writes into out[outlen]. */
-static void shell_quote(const char *s, char *out, int outlen) {
-    int j = 0;
-    if (j < outlen - 1) out[j++] = '\'';
-    for (int i = 0; s[i] && j < outlen - 5; i++) {
-        if (s[i] == '\'') {
-            /* ' → '\'' */
-            out[j++] = '\''; out[j++] = '\\'; out[j++] = '\''; out[j++] = '\'';
-        } else {
-            out[j++] = s[i];
-        }
-    }
-    if (j < outlen - 1) out[j++] = '\'';
-    out[j] = '\0';
-}
 
 /* Parse one line of rg --vimgrep output: path:line:col:text
    Falls back to grep -n format:            path:line:text     */
@@ -112,14 +97,7 @@ void qf_run(QfList *ql, const char *pattern, const char *path) {
 
 void qf_render_to_buf(QfList *ql, Buffer *buf) {
     /* Clear existing rows. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows    = NULL;
-    buf->numrows = 0;
-    buf->hl_dirty_from = 0x7fffffff;
+    buf_clear_rows(buf);
 
     /* One plain-text row per entry (used for navigation / cursor clamping).
        Visual rendering is overridden in draw_pane_rows with colours. */

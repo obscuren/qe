@@ -24,6 +24,7 @@ typedef struct {
 } Buffer;
 
 void buf_init(Buffer *b);
+void buf_clear_rows(Buffer *b);
 void buf_free(Buffer *b);
 
 void buf_insert_row(Buffer *b, int at, const char *s, int len);

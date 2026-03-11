@@ -14,6 +14,11 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Common ANSI SGR sequences. */
+#define SGR_RESET    "\x1b[m"
+#define SGR_REVERSE  "\x1b[7m"
+#define SGR_DIM_REV  "\x1b[2;7m"
+
 /* ── Append buffer ───────────────────────────────────────────────────── */
 
 typedef struct {
@@ -156,7 +161,7 @@ static const char *hl_to_escape(unsigned char hl) {
         case HL_TYPE:    return "\x1b[36m";    /* cyan        */
         case HL_STRING:  return "\x1b[32m";    /* green       */
         case HL_NUMBER:  return "\x1b[35m";    /* magenta     */
-        case HL_SEARCH:        return "\x1b[7m";    /* reverse      */
+        case HL_SEARCH:        return SGR_REVERSE;  /* reverse      */
         case HL_BRACKET_MATCH: return "\x1b[104;97m"; /* bright blue bg + white fg */
         case HL_VISUAL:        return "\x1b[44m";     /* blue background           */
         default:               return NULL;
@@ -299,7 +304,7 @@ static void render_row_content(AppendBuf *ab, const Row *row,
         int out_n = out_e - out_s;
 
         if (cur != prev_hl) {
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             if (bg_esc) ab_append(ab, bg_esc, bg_esc_len);
             const char *esc = hl_to_escape(cur);
             if (esc) ab_append(ab, esc, (int)strlen(esc));
@@ -316,7 +321,7 @@ static void render_row_content(AppendBuf *ab, const Row *row,
         vcol = char_end;
     }
 
-    if (any_esc) ab_append(ab, "\x1b[m", 3);
+    if (any_esc) ab_append(ab, SGR_RESET, 3);
 }
 
 /* Find the bracket that matches the one under the cursor (if any).
@@ -431,7 +436,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 char ch = tc.ch ? tc.ch : ' ';
                 ab_append(ab, &ch, 1);
             }
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
         }
         return;
     }
@@ -512,7 +517,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 int is_sel  = (filerow == pcy);
                 int avail   = p->width;
 
-                if (is_sel) ab_append(ab, "\x1b[7m", 4);
+                if (is_sel) ab_append(ab, SGR_REVERSE, 4);
 
                 /* ▶ / spaces */
                 if (is_sel) ab_append(ab, "▶ ", 4);
@@ -530,7 +535,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                     ab_append(ab, is_sel ? "\x1b[2;7m" : "\x1b[2m", is_sel ? 6 : 4);
                     ab_append(ab, e->path, dl);
                     avail -= dl;
-                    ab_append(ab, is_sel ? "\x1b[7m" : "\x1b[m", is_sel ? 4 : 3);
+                    ab_append(ab, is_sel ? SGR_REVERSE : SGR_RESET, is_sel ? 4 : 3);
                 }
                 if (fname_len > 0 && avail > 0) {
                     int fl = fname_len < avail ? fname_len : avail;
@@ -546,7 +551,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                     ab_append(ab, is_sel ? "\x1b[33;7m" : "\x1b[33m", is_sel ? 8 : 5);
                     ab_append(ab, lnum, llen);
                     avail -= llen;
-                    ab_append(ab, is_sel ? "\x1b[7m" : "\x1b[m", is_sel ? 4 : 3);
+                    ab_append(ab, is_sel ? SGR_REVERSE : SGR_RESET, is_sel ? 4 : 3);
                 }
 
                 /* Match text. */
@@ -558,7 +563,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                     ab_append(ab, e->text, tlen);
                 }
 
-                ab_append(ab, "\x1b[m", 3);
+                ab_append(ab, SGR_RESET, 3);
             }
             fr++;
             continue;
@@ -568,7 +573,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         if (is_tree && filerow < buf->numrows) {
             TreeState *ts = E.buftabs[p->buf_idx].tree;
             int is_sel = (filerow == pcy);
-            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+            if (is_sel) ab_append(ab, SGR_REVERSE, 4);
 
             Row *row = &buf->rows[filerow];
             int avail = p->width;
@@ -588,7 +593,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 ab_append(ab, "\x1b[31m", 5);      /* red */
 
             ab_append(ab, row->chars, rlen);
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             fr++;
             continue;
         }
@@ -599,7 +604,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             int avail = p->width;
             int rlen = row->len < avail ? row->len : avail;
             int is_sel = (filerow == pcy);
-            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+            if (is_sel) ab_append(ab, SGR_REVERSE, 4);
 
             /* Check if this row contains the current marker (◀). */
             int is_current = 0;
@@ -617,7 +622,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 ab_append(ab, "\x1b[36m", 5);      /* cyan for tree lines */
 
             ab_append(ab, row->chars, rlen);
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             fr++;
             continue;
         }
@@ -628,7 +633,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             int avail = p->width;
             int rlen = row->len < avail ? row->len : avail;
             int is_sel = (filerow == pcy);
-            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+            if (is_sel) ab_append(ab, SGR_REVERSE, 4);
 
             /* Find the end of the hash (first space). */
             int hash_end = 0;
@@ -644,7 +649,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 ab_append(ab, row->chars + hash_end, rlen - hash_end);
             }
 
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             fr++;
             continue;
         }
@@ -658,7 +663,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 ab_append(ab, "\x1b[2m", 4);  /* dim */
             ab_append(ab, row->chars, rlen);
             if (rlen > 0 && row->chars[0] == '#')
-                ab_append(ab, "\x1b[m", 3);
+                ab_append(ab, SGR_RESET, 3);
             fr++;
             continue;
         }
@@ -667,7 +672,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         if (is_log && filerow < buf->numrows) {
             BufTab *lbt = &E.buftabs[p->buf_idx];
             int is_sel = (filerow == pcy);
-            if (is_sel) ab_append(ab, "\x1b[7m", 4);
+            if (is_sel) ab_append(ab, SGR_REVERSE, 4);
 
             if (filerow < lbt->log_count) {
                 GitLogEntry *e = &lbt->log_entries[filerow];
@@ -727,7 +732,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 }
             }
 
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             fr++;
             continue;
         }
@@ -751,7 +756,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 }
             }
         } else if (filerow >= buf->numrows) {
-            if (row_bg) ab_append(ab, "\x1b[m", 3);
+            if (row_bg) ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "~", 1);
         } else {
             /* Gutter */
@@ -779,7 +784,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                         ab_append(ab, " ", 1);
                     }
                     /* Reset fg but keep bg. */
-                    ab_append(ab, "\x1b[m", 3);
+                    ab_append(ab, SGR_RESET, 3);
                     if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
                 }
 
@@ -802,7 +807,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                         ab_append(ab, "\x1b[33m", 5); /* yellow mark char */
                         ab_append(ab, &mc, 1);
                         if (row_bg) {
-                            ab_append(ab, "\x1b[m", 3);
+                            ab_append(ab, SGR_RESET, 3);
                             ab_append(ab, row_bg, (int)strlen(row_bg));
                         }
                         ab_append(ab, (filerow == pcy) ? "\x1b[1m" : "\x1b[2m", 4);
@@ -814,7 +819,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 while (pad-- > 0) ab_append(ab, " ", 1);
                 ab_append(ab, num, nlen);
                 ab_append(ab, " ", 1);
-                ab_append(ab, "\x1b[m", 3);
+                ab_append(ab, SGR_RESET, 3);
                 if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
             }
 
@@ -866,7 +871,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
 
             /* Reset attributes after row content to prevent background
                leaking to the next line (e.g. cursorline on empty rows). */
-            if (row_bg) ab_append(ab, "\x1b[m", 3);
+            if (row_bg) ab_append(ab, SGR_RESET, 3);
         }
 
         /* Advance fr: if this row is a closed fold, skip its body. */
@@ -877,6 +882,23 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             fr++;
         }
     }
+}
+
+/* Render a simple status bar: reverse-video background, left text, right text,
+   gap-filled with spaces. Used by all special buffer types. */
+static void status_bar_simple(AppendBuf *ab, const Pane *p, int is_active,
+                               const char *left, int llen,
+                               const char *right, int rlen) {
+    ab_append(ab, is_active ? SGR_REVERSE : SGR_DIM_REV, is_active ? 4 : 6);
+    char erase[16];
+    int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
+    ab_append(ab, erase, elen);
+    if (llen > p->width) llen = p->width;
+    ab_append(ab, left, llen);
+    int gap = p->width - llen - rlen;
+    while (gap-- > 0) ab_append(ab, " ", 1);
+    if (rlen > 0 && llen + rlen <= p->width) ab_append(ab, right, rlen);
+    ab_append(ab, SGR_RESET, 3);
 }
 
 static void draw_pane_status(AppendBuf *ab, const Pane *p,
@@ -905,16 +927,12 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
             ab_append(ab, " ", 1);
             col += len + 1;
         }
-        ab_append(ab, "\x1b[m", 3);
+        ab_append(ab, SGR_RESET, 3);
         return;
     }
 
     /* Terminal pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_TERM) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         TermState *ts = E.buftabs[p->buf_idx].term;
         char left[128], right[32];
         const char *state = (ts && ts->exited) ? "finished" : "running";
@@ -922,21 +940,12 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         int rlen = 0;
         if (ts && ts->exited)
             rlen = snprintf(right, sizeof(right), "exit %d", ts->exit_status);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (rlen > 0 && llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Quickfix pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_QF) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         QfList *ql = E.buftabs[p->buf_idx].qf;
         char left[128], right[16];
         int llen = ql
@@ -944,151 +953,83 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
                        ql->count, ql->pattern)
             : snprintf(left,  sizeof(left),  " [Quickfix]");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Blame pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_BLAME) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         int src = E.buftabs[p->buf_idx].blame_source_buf;
         const char *fname = E.buftabs[src].buf.filename;
         if (!fname) fname = "[No Name]";
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left), " [Blame] %.30s", fname);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Diff pane: compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_DIFF) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         const char *fname = buf->filename ? buf->filename : "[No Name]";
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left), " [HEAD] %.30s", fname);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Commit buffer: status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_COMMIT) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left),
                             " [Commit] :wq to commit, :q to abort");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Log pane: status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_LOG) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         int lc = E.buftabs[p->buf_idx].log_count;
         char left[128], right[16];
         int llen = snprintf(left, sizeof(left),
                             " [Git Log] %d commits", lc);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Git show (commit diff) pane: status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_SHOW) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[128], right[16];
         const char *fn = buf->filename ? buf->filename : "";
         int llen = snprintf(left, sizeof(left), " %s", fn);
         int rlen = snprintf(right, sizeof(right), "%d/%d", pcy + 1, buf->numrows);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Tree pane: special compact status. */
     if (E.buftabs[p->buf_idx].kind == BT_TREE) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[32], right[16];
         int llen = snprintf(left,  sizeof(left),  " [Tree]");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Revisions pane: compact status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_REVISIONS) {
-        ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
-        char erase[16];
-        int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
-        ab_append(ab, erase, elen);
         char left[64], right[16];
         int llen = snprintf(left,  sizeof(left),  " [Local Revisions]");
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
-        if (llen > p->width) llen = p->width;
-        ab_append(ab, left, llen);
-        int gap = p->width - llen - rlen;
-        while (gap-- > 0) ab_append(ab, " ", 1);
-        if (llen + rlen <= p->width) ab_append(ab, right, rlen);
-        ab_append(ab, "\x1b[m", 3);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;
     }
 
     /* Active = full reverse video; inactive = dim reverse. */
-    ab_append(ab, is_active ? "\x1b[7m" : "\x1b[2;7m", is_active ? 4 : 6);
+    ab_append(ab, is_active ? SGR_REVERSE : SGR_DIM_REV, is_active ? 4 : 6);
 
     /* Erase pane width with current attributes. */
     char erase[16];
@@ -1163,7 +1104,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     while (gap-- > 0) ab_append(ab, " ", 1);
     if (llen + rlen <= p->width) ab_append(ab, right, rlen);
 
-    ab_append(ab, "\x1b[m", 3);
+    ab_append(ab, SGR_RESET, 3);
 }
 
 /* Draw a 1-column white-background divider between side-by-side panes.
@@ -1218,14 +1159,14 @@ static void fuzzy_draw(AppendBuf *ab) {
 
         if (y == 0) {
             /* ── Top border ─────────────────────────────────────── */
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "┌", 3);
             for (int x = 0; x < inner; x++) ab_append(ab, "─", 3);
             ab_append(ab, "┐", 3);
 
         } else if (y == 1) {
             /* ── Search input row ───────────────────────────────── */
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "│", 3);
             ab_append(ab, " ", 1);
             const char *label = f->buf_mode ? "buffer:" : "search:";
@@ -1233,7 +1174,7 @@ static void fuzzy_draw(AppendBuf *ab) {
             ab_append(ab, label,    7);
             ab_append(ab, "\x1b[1;37m", 7);  /* bold white: " > " */
             ab_append(ab, " > ",        3);
-            ab_append(ab, "\x1b[m",     3);
+            ab_append(ab, SGR_RESET,    3);
 
             /* Query text — show tail if it overflows. */
             int avail  = inner - 1 - 7 - 3;  /* space + label + " > " */
@@ -1242,26 +1183,26 @@ static void fuzzy_draw(AppendBuf *ab) {
             ab_append(ab, f->query + qstart, qshow);
             int pad = avail - qshow;
             while (pad-- > 0) ab_append(ab, " ", 1);
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "│", 3);
 
         } else if (y == 2 || y == height - 3) {
             /* ── Separator ──────────────────────────────────────── */
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "├", 3);
             for (int x = 0; x < inner; x++) ab_append(ab, "─", 3);
             ab_append(ab, "┤", 3);
 
         } else if (y == height - 1) {
             /* ── Bottom border ──────────────────────────────────── */
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "└", 3);
             for (int x = 0; x < inner; x++) ab_append(ab, "─", 3);
             ab_append(ab, "┘", 3);
 
         } else if (y == height - 2) {
             /* ── Footer ─────────────────────────────────────────── */
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "│", 3);
             ab_append(ab, " ", 1);
             ab_append(ab, "\x1b[2m", 4);  /* dim */
@@ -1282,13 +1223,13 @@ static void fuzzy_draw(AppendBuf *ab) {
                 int p = inner - 1 - clen;
                 while (p-- > 0) ab_append(ab, " ", 1);
             }
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "│", 3);
 
         } else {
             /* ── Result row ─────────────────────────────────────── */
             int ridx = (y - 3) + f->scroll;   /* y==3 → first result */
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "│", 3);
             ab_append(ab, " ", 1);
 
@@ -1296,7 +1237,7 @@ static void fuzzy_draw(AppendBuf *ab) {
             if (ridx < f->match_count) {
                 FuzzyMatch *m  = &f->matches[ridx];
                 int is_sel = (ridx == f->selected);
-                if (is_sel) ab_append(ab, "\x1b[7m", 4);
+                if (is_sel) ab_append(ab, SGR_REVERSE, 4);
 
                 /* ▶ / spaces (2 visual cols). */
                 if (is_sel) ab_append(ab, "▶ ", 4);   /* 3-byte UTF-8 + space */
@@ -1317,7 +1258,7 @@ static void fuzzy_draw(AppendBuf *ab) {
                     ab_append(ab, m->path, dl);
                     avail -= dl;
                     if (is_sel) ab_append(ab, "\x1b[7m",  4);
-                    else        ab_append(ab, "\x1b[m",   3);
+                    else        ab_append(ab, SGR_RESET, 3);
                 }
 
                 /* Filename — char by char, highlight matched positions. */
@@ -1338,7 +1279,7 @@ static void fuzzy_draw(AppendBuf *ab) {
                     }
                     ab_append(ab, &fname[i], 1);
                 }
-                ab_append(ab, "\x1b[m", 3);
+                ab_append(ab, SGR_RESET, 3);
                 while (avail-- > 0) ab_append(ab, " ", 1);
             } else {
                 for (int x = 0; x < avail; x++) ab_append(ab, " ", 1);
@@ -1401,7 +1342,7 @@ static void draw_global_command_bar(AppendBuf *ab) {
                     ab_append(ab, "\x1b[41;97m", 8);
                 ab_append(ab, E.statusmsg, len);
                 if (E.statusmsg_is_error)
-                    ab_append(ab, "\x1b[m", 3);
+                    ab_append(ab, SGR_RESET, 3);
             }
             break;
     }
@@ -1420,7 +1361,7 @@ static void draw_global_command_bar(AppendBuf *ab) {
             ab_append(ab, pos, plen);
             ab_append(ab, "\x1b[31m", 5);  /* red */
             ab_append(ab, rec, rlen);
-            ab_append(ab, "\x1b[m", 3);
+            ab_append(ab, SGR_RESET, 3);
         }
     }
 }
@@ -1473,7 +1414,7 @@ void editor_refresh_screen(void) {
 
     ab_append(&ab, "\x1b[?2026h", 8); /* begin synchronized update */
     ab_append(&ab, "\x1b[?25l",   6); /* hide cursor */
-    ab_append(&ab, "\x1b[m",      3); /* reset attributes before clear */
+    ab_append(&ab, SGR_RESET,     3); /* reset attributes before clear */
     ab_append(&ab, "\x1b[H",      3); /* cursor to home      */
     ab_append(&ab, "\x1b[J",      3); /* erase to end of screen (no scrollback push on macOS) */
 

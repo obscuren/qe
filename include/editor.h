@@ -4,6 +4,8 @@
 
 #include "buf.h"
 #include "fuzzy.h"
+
+#include <string.h>
 #include "git.h"
 #include "qf.h"
 #include "term_emu.h"
@@ -68,6 +70,13 @@ typedef struct {
    Use this to skip special buffers in :ls, :bn/:bp, fuzzy picker, dirty checks, etc. */
 static inline int buftab_is_special(const BufTab *bt) {
     return bt->kind != BT_NORMAL;
+}
+
+/* Zero a BufTab and set watch_handle to -1 (the "no watch" sentinel).
+   Plain memset leaves watch_handle == 0, which is a valid fd. */
+static inline void buftab_reset(BufTab *bt) {
+    memset(bt, 0, sizeof(*bt));
+    bt->watch_handle = -1;
 }
 
 typedef enum {

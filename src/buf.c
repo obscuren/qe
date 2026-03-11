@@ -47,12 +47,19 @@ void buf_init(Buffer *b) {
     b->folds_cap       = 0;
 }
 
-void buf_free(Buffer *b) {
+void buf_clear_rows(Buffer *b) {
     for (int i = 0; i < b->numrows; i++) {
         free(b->rows[i].chars);
         free(b->rows[i].hl);
     }
     free(b->rows);
+    b->rows    = NULL;
+    b->numrows = 0;
+    b->hl_dirty_from = INT_MAX;
+}
+
+void buf_free(Buffer *b) {
+    buf_clear_rows(b);
     free(b->filename);
     free(b->git_signs);
     free(b->folds);
