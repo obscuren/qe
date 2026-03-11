@@ -1848,6 +1848,24 @@ static void tree_handle_key(int c) {
     }
 }
 
+/* Lightweight pane focus restore — used after removing a special pane.
+   Unlike pane_activate(), this skips pane_save_cursor / editor_buf_save
+   because the caller has already torn down the departing pane. */
+static void pane_restore_focus(int cpane) {
+    int donor_buf = E.panes[cpane].buf_idx;
+    if (E.cur_buftab != donor_buf) {
+        editor_buf_restore(donor_buf);
+        E.cur_buftab = donor_buf;
+    }
+    E.cur_pane   = cpane;
+    E.screenrows = E.panes[cpane].height;
+    E.screencols = E.panes[cpane].width;
+    E.cx     = E.panes[cpane].cx;
+    E.cy     = E.panes[cpane].cy;
+    E.rowoff = E.panes[cpane].rowoff;
+    E.coloff = E.panes[cpane].coloff;
+}
+
 static int find_pane_by_kind(BufTabKind kind) {
     for (int i = 0; i < E.num_panes; i++)
         if (E.buftabs[E.panes[i].buf_idx].kind == kind) return i;
@@ -1893,17 +1911,8 @@ static void editor_open_tree_pane(void) {
 
         /* Switch to the content pane. */
         if (cpane >= 0) {
-            int donor_buf = E.panes[cpane].buf_idx;
-            if (E.cur_buftab != donor_buf) {
-                editor_buf_save(E.cur_buftab);
-                editor_buf_restore(donor_buf);
-                E.cur_buftab = donor_buf;
-            }
-            E.cur_pane   = cpane;
-            E.screenrows = E.panes[cpane].height;
-            E.screencols = E.panes[cpane].width;
-            E.cx = E.panes[cpane].cx; E.cy = E.panes[cpane].cy;
-            E.rowoff = E.panes[cpane].rowoff; E.coloff = E.panes[cpane].coloff;
+            editor_buf_save(E.cur_buftab);
+            pane_restore_focus(cpane);
         }
         E.mode = MODE_NORMAL;
         E.match_bracket_valid = 0;
@@ -2045,20 +2054,7 @@ static void blame_close(void) {
     if (cpane > bpi) cpane--;
 
     /* Activate the content pane. */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
@@ -2210,20 +2206,8 @@ static void log_close(void) {
     /* Activate last content pane. */
     int cpane = E.last_content_pane;
     if (cpane >= E.num_panes || cpane < 0) cpane = 0;
-    if (E.cur_pane == lpi || E.cur_pane >= E.num_panes) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (E.cur_pane == lpi || E.cur_pane >= E.num_panes)
+        pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
@@ -2549,20 +2533,7 @@ static void diff_close(void) {
     if (cpane > dpi) cpane--;
 
     /* Activate the source pane. */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
@@ -2885,22 +2856,7 @@ static void qf_close_pane(void) {
     E.num_panes--;
     if (cpane > qpi) cpane--;
 
-    /* Manually activate the content pane (avoids pane_activate's stale-index
-       pane_save_cursor + buffer save that would clobber the content buffer). */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
@@ -3225,20 +3181,7 @@ static void rev_close_pane(void) {
     if (cpane > rpi) cpane--;
 
     /* Activate content pane. */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
