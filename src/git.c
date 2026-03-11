@@ -561,20 +561,12 @@ int git_stage_hunk(const char *filename, const GitLines *lines, int hunk_idx) {
 
 /* ── Show HEAD ───────────────────────────────────────────────────────── */
 
-char **git_show_head(const char *filename, int *out_count) {
+static char **popen_read_lines(const char *cmd, int *out_count) {
     *out_count = 0;
-    if (!filename) return NULL;
-
-    char qfile[1024];
-    shell_quote(filename, qfile, sizeof(qfile));
-
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd), "git show HEAD:%s 2>/dev/null", qfile);
-
     FILE *fp = popen(cmd, "r");
     if (!fp) return NULL;
 
-    int cap = 256, count = 0;
+    int cap = 128, count = 0;
     char **lines = malloc(sizeof(char *) * cap);
     if (!lines) { pclose(fp); return NULL; }
 
@@ -597,6 +589,19 @@ char **git_show_head(const char *filename, int *out_count) {
     if (count == 0) { free(lines); return NULL; }
     *out_count = count;
     return lines;
+}
+
+char **git_show_head(const char *filename, int *out_count) {
+    *out_count = 0;
+    if (!filename) return NULL;
+
+    char qfile[1024];
+    shell_quote(filename, qfile, sizeof(qfile));
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "git show HEAD:%s 2>/dev/null", qfile);
+
+    return popen_read_lines(cmd, out_count);
 }
 
 /* ── Blame ───────────────────────────────────────────────────────────── */
@@ -717,30 +722,5 @@ char **git_show_commit(const char *hash, int *out_count) {
     snprintf(cmd, sizeof(cmd),
              "git show --stat --patch %s 2>/dev/null", hash);
 
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return NULL;
-
-    int cap = 128, count = 0;
-    char **lines = malloc(sizeof(char *) * cap);
-    if (!lines) { pclose(fp); return NULL; }
-
-    char line[4096];
-    while (fgets(line, sizeof(line), fp)) {
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
-            line[--len] = '\0';
-
-        if (count >= cap) {
-            cap *= 2;
-            char **tmp = realloc(lines, sizeof(char *) * cap);
-            if (!tmp) break;
-            lines = tmp;
-        }
-        lines[count++] = strdup(line);
-    }
-    pclose(fp);
-
-    if (count == 0) { free(lines); return NULL; }
-    *out_count = count;
-    return lines;
+    return popen_read_lines(cmd, out_count);
 }
