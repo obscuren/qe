@@ -329,9 +329,7 @@ void editor_reload_buf(int buftab_idx) {
 /* ── Undo state ──────────────────────────────────────────────────── */
 
 void editor_restore_state(const UndoState *s) {
-    for (int i = 0; i < E.buf.numrows; i++)
-        free(E.buf.rows[i].chars);
-    free(E.buf.rows);
+    buf_clear_rows(&E.buf);
 
     E.buf.numrows = s->numrows;
     if (s->numrows > 0) {
