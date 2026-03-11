@@ -782,6 +782,12 @@ static int text_object_range(char ia, char obj,
     }
 }
 
+static void pre_insert_capture(void) {
+    E.pre_insert_snapshot = editor_capture_state();
+    E.pre_insert_dirty    = E.buf.dirty;
+    E.has_pre_insert      = 1;
+}
+
 /* Apply op ('d','y','c') over half-open char range [r0,c0]..[r1,c1).
    Sets up last_action / insert_motion for dot repeat. */
 static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
@@ -797,9 +803,7 @@ static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
         yank_set_chars(r0, c0, c1);
         if (op == 'd' || op == 'c') {
             if (op == 'c') {
-                E.pre_insert_snapshot = editor_capture_state();
-                E.pre_insert_dirty    = E.buf.dirty;
-                E.has_pre_insert      = 1;
+                pre_insert_capture();
             } else {
                 push_undo("delete");
             }
@@ -826,9 +830,7 @@ static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
         yank_set_multiline_chars(r0, c0, r1, c1);
         if (op == 'd' || op == 'c') {
             if (op == 'c') {
-                E.pre_insert_snapshot = editor_capture_state();
-                E.pre_insert_dirty    = E.buf.dirty;
-                E.has_pre_insert      = 1;
+                pre_insert_capture();
             } else {
                 push_undo("delete");
             }
@@ -924,9 +926,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
             }
         } else if (op == 'c') {
             /* cc: delete n lines, keep one empty row, enter Insert. */
-            E.pre_insert_snapshot = editor_capture_state();
-            E.pre_insert_dirty    = E.buf.dirty;
-            E.has_pre_insert      = 1;
+            pre_insert_capture();
             for (int i = r1; i > r0; i--)
                 buf_delete_row(&E.buf, i);
             Row *row  = &E.buf.rows[r0];
@@ -1042,9 +1042,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
 
         if (op == 'd' || op == 'c') {
             if (op == 'c') {
-                E.pre_insert_snapshot = editor_capture_state();
-                E.pre_insert_dirty    = E.buf.dirty;
-                E.has_pre_insert      = 1;
+                pre_insert_capture();
             } else {
                 push_undo("delete");
             }
@@ -1101,9 +1099,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
     if (op == 'd' || op == 'c') {
         if (op == 'c') {
             /* Snapshot before the delete so one 'u' restores the pre-change state. */
-            E.pre_insert_snapshot = editor_capture_state();
-            E.pre_insert_dirty    = E.buf.dirty;
-            E.has_pre_insert      = 1;
+            pre_insert_capture();
         } else {
             push_undo("delete");
         }
@@ -1261,9 +1257,7 @@ static void visual_op_change(void) {
     visual_get_bounds(&r0, &c0, &r1, &c1);
     int linewise = (E.mode == MODE_VISUAL_LINE) || (r0 != r1);
     /* Snapshot before modification so one 'u' restores pre-change state. */
-    E.pre_insert_snapshot = editor_capture_state();
-    E.pre_insert_dirty    = E.buf.dirty;
-    E.has_pre_insert      = 1;
+    pre_insert_capture();
     E.mode = MODE_INSERT;
     if (linewise) {
         yank_set_lines(r0, r1);
@@ -1321,9 +1315,7 @@ static void visual_block_insert(int append) {
     int col = append ? rc + 1 : lc;
 
     /* Capture undo before any changes. */
-    E.pre_insert_snapshot = editor_capture_state();
-    E.pre_insert_dirty    = E.buf.dirty;
-    E.has_pre_insert      = 1;
+    pre_insert_capture();
 
     /* Position cursor at the insert column of the first row. */
     E.cy = r0; E.cx = col;
@@ -4501,9 +4493,7 @@ done:
    entry is the key that triggered insert ('i', 'a', 'A', 'o', 'O'). */
 static void enter_insert_mode(char entry) {
     if (E.readonly) { status_err("Read-only mode"); return; }
-    E.pre_insert_snapshot = editor_capture_state();
-    E.pre_insert_dirty    = E.buf.dirty;
-    E.has_pre_insert      = 1;
+    pre_insert_capture();
     E.mode                = MODE_INSERT;
     E.insert_entry        = entry;
     insert_rec_reset();
