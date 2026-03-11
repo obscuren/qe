@@ -2028,11 +2028,7 @@ static void blame_close(void) {
 
     /* Free blame buffer. */
     if (E.cur_pane == bpi) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
     } else {
@@ -2200,11 +2196,7 @@ static void log_close(void) {
     /* Free log data. */
     free(E.buftabs[buf_idx].log_entries);
     if (E.cur_pane == lpi) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         free(E.buf.git_signs);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
@@ -2487,11 +2479,7 @@ static void commit_execute(void) {
 
     if (ok) {
         /* Close commit buffer and return to previous buffer. */
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         free(E.buf.git_signs);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
@@ -2552,11 +2540,7 @@ static void diff_close(void) {
 
     /* Free diff buffer. */
     if (E.cur_pane == dpi) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         free(E.buf.git_signs);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
@@ -2893,11 +2877,7 @@ static void qf_close_pane(void) {
        without saving, so the qf content is never written over any content buftab.
        When inactive, it is parked in the buftab. */
     if (qf_active) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
     } else {
@@ -3071,13 +3051,7 @@ static void rev_render_node(UndoNode *n, Buffer *buf, UndoNode *current,
 
 static void rev_render_to_buf(const UndoTree *tree, Buffer *buf, UndoNode *current) {
     /* Clear existing rows. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows = NULL;
-    buf->numrows = 0;
+    buf_clear_rows(buf);
 
     if (!tree->root) {
         buf_insert_row(buf, 0, "(no undo history)", 17);
@@ -3110,13 +3084,7 @@ static void rev_update_preview(UndoNode *node) {
     Buffer *buf = &E.buftabs[src_buf].buf;
 
     /* Replace the parked buffer rows with the node's state. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows = NULL;
-    buf->numrows = 0;
+    buf_clear_rows(buf);
 
     for (int i = 0; i < node->state.numrows; i++) {
         buf_insert_row(buf, i, node->state.row_chars[i], node->state.row_lens[i]);
@@ -3163,13 +3131,7 @@ static void rev_restore_original(void) {
     Buffer *buf = &E.buftabs[src_buf].buf;
 
     /* Replace rows with original. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows = NULL;
-    buf->numrows = 0;
+    buf_clear_rows(buf);
 
     for (int i = 0; i < rev_saved_state.numrows; i++) {
         buf_insert_row(buf, i, rev_saved_state.row_chars[i],
@@ -3261,11 +3223,7 @@ static void rev_close_pane(void) {
 
     /* Free the revisions buffer. */
     if (rev_active) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
     } else {
@@ -3964,11 +3922,7 @@ void editor_execute_command(void) {
                     commit_execute();
                 } else if (dq) {
                     /* Abort: close commit buffer without committing. */
-                    for (int i = 0; i < E.buf.numrows; i++) {
-                        free(E.buf.rows[i].chars);
-                        free(E.buf.rows[i].hl);
-                    }
-                    free(E.buf.rows);
+                    buf_clear_rows(&E.buf);
                     free(E.buf.git_signs);
                     memset(&E.buf, 0, sizeof(Buffer));
                     E.buf.hl_dirty_from = INT_MAX;
