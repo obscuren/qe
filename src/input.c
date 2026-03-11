@@ -782,6 +782,12 @@ static int text_object_range(char ia, char obj,
     }
 }
 
+static void pre_insert_capture(void) {
+    E.pre_insert_snapshot = editor_capture_state();
+    E.pre_insert_dirty    = E.buf.dirty;
+    E.has_pre_insert      = 1;
+}
+
 /* Apply op ('d','y','c') over half-open char range [r0,c0]..[r1,c1).
    Sets up last_action / insert_motion for dot repeat. */
 static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
@@ -797,9 +803,7 @@ static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
         yank_set_chars(r0, c0, c1);
         if (op == 'd' || op == 'c') {
             if (op == 'c') {
-                E.pre_insert_snapshot = editor_capture_state();
-                E.pre_insert_dirty    = E.buf.dirty;
-                E.has_pre_insert      = 1;
+                pre_insert_capture();
             } else {
                 push_undo("delete");
             }
@@ -826,9 +830,7 @@ static void apply_textobj_op(char op, int r0, int c0, int r1, int c1,
         yank_set_multiline_chars(r0, c0, r1, c1);
         if (op == 'd' || op == 'c') {
             if (op == 'c') {
-                E.pre_insert_snapshot = editor_capture_state();
-                E.pre_insert_dirty    = E.buf.dirty;
-                E.has_pre_insert      = 1;
+                pre_insert_capture();
             } else {
                 push_undo("delete");
             }
@@ -924,9 +926,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
             }
         } else if (op == 'c') {
             /* cc: delete n lines, keep one empty row, enter Insert. */
-            E.pre_insert_snapshot = editor_capture_state();
-            E.pre_insert_dirty    = E.buf.dirty;
-            E.has_pre_insert      = 1;
+            pre_insert_capture();
             for (int i = r1; i > r0; i--)
                 buf_delete_row(&E.buf, i);
             Row *row  = &E.buf.rows[r0];
@@ -1042,9 +1042,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
 
         if (op == 'd' || op == 'c') {
             if (op == 'c') {
-                E.pre_insert_snapshot = editor_capture_state();
-                E.pre_insert_dirty    = E.buf.dirty;
-                E.has_pre_insert      = 1;
+                pre_insert_capture();
             } else {
                 push_undo("delete");
             }
@@ -1101,9 +1099,7 @@ static void editor_apply_op(char op, int motion_key, int n) {
     if (op == 'd' || op == 'c') {
         if (op == 'c') {
             /* Snapshot before the delete so one 'u' restores the pre-change state. */
-            E.pre_insert_snapshot = editor_capture_state();
-            E.pre_insert_dirty    = E.buf.dirty;
-            E.has_pre_insert      = 1;
+            pre_insert_capture();
         } else {
             push_undo("delete");
         }
@@ -1261,9 +1257,7 @@ static void visual_op_change(void) {
     visual_get_bounds(&r0, &c0, &r1, &c1);
     int linewise = (E.mode == MODE_VISUAL_LINE) || (r0 != r1);
     /* Snapshot before modification so one 'u' restores pre-change state. */
-    E.pre_insert_snapshot = editor_capture_state();
-    E.pre_insert_dirty    = E.buf.dirty;
-    E.has_pre_insert      = 1;
+    pre_insert_capture();
     E.mode = MODE_INSERT;
     if (linewise) {
         yank_set_lines(r0, r1);
@@ -1321,9 +1315,7 @@ static void visual_block_insert(int append) {
     int col = append ? rc + 1 : lc;
 
     /* Capture undo before any changes. */
-    E.pre_insert_snapshot = editor_capture_state();
-    E.pre_insert_dirty    = E.buf.dirty;
-    E.has_pre_insert      = 1;
+    pre_insert_capture();
 
     /* Position cursor at the insert column of the first row. */
     E.cy = r0; E.cx = col;
@@ -1848,6 +1840,30 @@ static void tree_handle_key(int c) {
     }
 }
 
+/* Lightweight pane focus restore — used after removing a special pane.
+   Unlike pane_activate(), this skips pane_save_cursor / editor_buf_save
+   because the caller has already torn down the departing pane. */
+static void pane_restore_focus(int cpane) {
+    int donor_buf = E.panes[cpane].buf_idx;
+    if (E.cur_buftab != donor_buf) {
+        editor_buf_restore(donor_buf);
+        E.cur_buftab = donor_buf;
+    }
+    E.cur_pane   = cpane;
+    E.screenrows = E.panes[cpane].height;
+    E.screencols = E.panes[cpane].width;
+    E.cx     = E.panes[cpane].cx;
+    E.cy     = E.panes[cpane].cy;
+    E.rowoff = E.panes[cpane].rowoff;
+    E.coloff = E.panes[cpane].coloff;
+}
+
+static int find_pane_by_kind(BufTabKind kind) {
+    for (int i = 0; i < E.num_panes; i++)
+        if (E.buftabs[E.panes[i].buf_idx].kind == kind) return i;
+    return -1;
+}
+
 /* Open the file-tree sidebar (or close it if already open). */
 static void editor_open_tree_pane(void) {
     /* Check if a tree pane is already open — toggle it closed. */
@@ -1887,17 +1903,8 @@ static void editor_open_tree_pane(void) {
 
         /* Switch to the content pane. */
         if (cpane >= 0) {
-            int donor_buf = E.panes[cpane].buf_idx;
-            if (E.cur_buftab != donor_buf) {
-                editor_buf_save(E.cur_buftab);
-                editor_buf_restore(donor_buf);
-                E.cur_buftab = donor_buf;
-            }
-            E.cur_pane   = cpane;
-            E.screenrows = E.panes[cpane].height;
-            E.screencols = E.panes[cpane].width;
-            E.cx = E.panes[cpane].cx; E.cy = E.panes[cpane].cy;
-            E.rowoff = E.panes[cpane].rowoff; E.coloff = E.panes[cpane].coloff;
+            editor_buf_save(E.cur_buftab);
+            pane_restore_focus(cpane);
         }
         E.mode = MODE_NORMAL;
         E.match_bracket_valid = 0;
@@ -1999,14 +2006,10 @@ void editor_open_fuzzy(void) {
 
 #define BLAME_WIDTH 40
 
-static int blame_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_BLAME) return i;
-    return -1;
-}
+
 
 static void blame_close(void) {
-    int bpi = blame_pane_idx();
+    int bpi = find_pane_by_kind(BT_BLAME);
     if (bpi < 0) return;
 
     Pane *bp = &E.panes[bpi];
@@ -2028,11 +2031,7 @@ static void blame_close(void) {
 
     /* Free blame buffer. */
     if (E.cur_pane == bpi) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
     } else {
@@ -2047,27 +2046,14 @@ static void blame_close(void) {
     if (cpane > bpi) cpane--;
 
     /* Activate the content pane. */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
 static void blame_open(void) {
     /* Toggle off if already open. */
-    if (blame_pane_idx() >= 0) { blame_close(); return; }
+    if (find_pane_by_kind(BT_BLAME) >= 0) { blame_close(); return; }
 
     if (!E.buf.filename) { status_err("No filename"); return; }
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
@@ -2149,7 +2135,7 @@ static void blame_open(void) {
 static void blame_handle_key(int c) {
     if (c == 'q' || c == '\x1b') { blame_close(); return; }
 
-    int bpi = blame_pane_idx();
+    int bpi = find_pane_by_kind(BT_BLAME);
     if (bpi < 0) return;
     int src_buf = E.buftabs[E.panes[bpi].buf_idx].blame_source_buf;
 
@@ -2173,14 +2159,10 @@ static void blame_handle_key(int c) {
 
 /* ── Git log pane ────────────────────────────────────────────────────── */
 
-static int log_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_LOG) return i;
-    return -1;
-}
+
 
 static void log_close(void) {
-    int lpi = log_pane_idx();
+    int lpi = find_pane_by_kind(BT_LOG);
     if (lpi < 0) return;
 
     Pane *lp = &E.panes[lpi];
@@ -2200,11 +2182,7 @@ static void log_close(void) {
     /* Free log data. */
     free(E.buftabs[buf_idx].log_entries);
     if (E.cur_pane == lpi) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         free(E.buf.git_signs);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
@@ -2220,26 +2198,14 @@ static void log_close(void) {
     /* Activate last content pane. */
     int cpane = E.last_content_pane;
     if (cpane >= E.num_panes || cpane < 0) cpane = 0;
-    if (E.cur_pane == lpi || E.cur_pane >= E.num_panes) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (E.cur_pane == lpi || E.cur_pane >= E.num_panes)
+        pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
 static void log_open(void) {
-    if (log_pane_idx() >= 0) { log_close(); return; }
+    if (find_pane_by_kind(BT_LOG) >= 0) { log_close(); return; }
 
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
@@ -2487,11 +2453,7 @@ static void commit_execute(void) {
 
     if (ok) {
         /* Close commit buffer and return to previous buffer. */
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         free(E.buf.git_signs);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
@@ -2523,14 +2485,10 @@ static void commit_execute(void) {
 
 /* ── Diff pane (HEAD vs working copy) ────────────────────────────────── */
 
-static int diff_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_DIFF) return i;
-    return -1;
-}
+
 
 static void diff_close(void) {
-    int dpi = diff_pane_idx();
+    int dpi = find_pane_by_kind(BT_DIFF);
     if (dpi < 0) return;
 
     Pane *dp = &E.panes[dpi];
@@ -2552,11 +2510,7 @@ static void diff_close(void) {
 
     /* Free diff buffer. */
     if (E.cur_pane == dpi) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         free(E.buf.git_signs);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
@@ -2571,27 +2525,14 @@ static void diff_close(void) {
     if (cpane > dpi) cpane--;
 
     /* Activate the source pane. */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
 static void diff_open(void) {
     /* Toggle off if already open. */
-    if (diff_pane_idx() >= 0) { diff_close(); return; }
+    if (find_pane_by_kind(BT_DIFF) >= 0) { diff_close(); return; }
 
     if (!E.buf.filename) { status_err("No filename"); return; }
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
@@ -2797,15 +2738,11 @@ static void hunk_revert(void) {
 
 /* ── Quickfix pane ───────────────────────────────────────────────────── */
 
-static int qf_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_QF) return i;
-    return -1;
-}
+
 
 /* Jump to the selected quickfix entry in the last content pane. */
 static void qf_jump(int idx) {
-    int qpi = qf_pane_idx();
+    int qpi = find_pane_by_kind(BT_QF);
     if (qpi < 0) return;
     QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
     if (!ql || idx < 0 || idx >= ql->count) return;
@@ -2860,7 +2797,7 @@ static void qf_jump(int idx) {
 }
 
 static void qf_close_pane(void) {
-    int qpi = qf_pane_idx();
+    int qpi = find_pane_by_kind(BT_QF);
     if (qpi < 0) return;
 
     int qf_top    = E.panes[qpi].top;
@@ -2893,11 +2830,7 @@ static void qf_close_pane(void) {
        without saving, so the qf content is never written over any content buftab.
        When inactive, it is parked in the buftab. */
     if (qf_active) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
     } else {
@@ -2915,29 +2848,14 @@ static void qf_close_pane(void) {
     E.num_panes--;
     if (cpane > qpi) cpane--;
 
-    /* Manually activate the content pane (avoids pane_activate's stale-index
-       pane_save_cursor + buffer save that would clobber the content buffer). */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
 
 static void qf_open_pane(QfList *ql) {
     /* Close existing qf pane first (replace with new results). */
-    if (qf_pane_idx() >= 0) qf_close_pane();
+    if (find_pane_by_kind(BT_QF) >= 0) qf_close_pane();
 
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
@@ -2993,7 +2911,7 @@ static void qf_open_pane(QfList *ql) {
 }
 
 static void qf_handle_key(int c) {
-    int qpi = qf_pane_idx();
+    int qpi = find_pane_by_kind(BT_QF);
     if (qpi < 0) return;
     QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
 
@@ -3017,11 +2935,7 @@ static UndoState rev_saved_state;
 static int       rev_saved_valid;
 static int       rev_saved_src_buf;  /* buftab index of the source buffer */
 
-static int rev_pane_idx(void) {
-    for (int i = 0; i < E.num_panes; i++)
-        if (E.buftabs[E.panes[i].buf_idx].kind == BT_REVISIONS) return i;
-    return -1;
-}
+
 
 /* Render the undo tree into buffer rows for display.
    Format: indented tree with markers for current node and branch points.
@@ -3071,13 +2985,7 @@ static void rev_render_node(UndoNode *n, Buffer *buf, UndoNode *current,
 
 static void rev_render_to_buf(const UndoTree *tree, Buffer *buf, UndoNode *current) {
     /* Clear existing rows. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows = NULL;
-    buf->numrows = 0;
+    buf_clear_rows(buf);
 
     if (!tree->root) {
         buf_insert_row(buf, 0, "(no undo history)", 17);
@@ -3110,13 +3018,7 @@ static void rev_update_preview(UndoNode *node) {
     Buffer *buf = &E.buftabs[src_buf].buf;
 
     /* Replace the parked buffer rows with the node's state. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows = NULL;
-    buf->numrows = 0;
+    buf_clear_rows(buf);
 
     for (int i = 0; i < node->state.numrows; i++) {
         buf_insert_row(buf, i, node->state.row_chars[i], node->state.row_lens[i]);
@@ -3163,13 +3065,7 @@ static void rev_restore_original(void) {
     Buffer *buf = &E.buftabs[src_buf].buf;
 
     /* Replace rows with original. */
-    for (int i = 0; i < buf->numrows; i++) {
-        free(buf->rows[i].chars);
-        free(buf->rows[i].hl);
-    }
-    free(buf->rows);
-    buf->rows = NULL;
-    buf->numrows = 0;
+    buf_clear_rows(buf);
 
     for (int i = 0; i < rev_saved_state.numrows; i++) {
         buf_insert_row(buf, i, rev_saved_state.row_chars[i],
@@ -3189,7 +3085,7 @@ static void rev_restore_original(void) {
 }
 
 static void rev_activate_entry(void) {
-    int rpi = rev_pane_idx();
+    int rpi = find_pane_by_kind(BT_REVISIONS);
     if (rpi < 0) return;
 
     BufTab *rbt = &E.buftabs[E.panes[rpi].buf_idx];
@@ -3224,7 +3120,7 @@ static void rev_activate_entry(void) {
 }
 
 static void rev_close_pane(void) {
-    int rpi = rev_pane_idx();
+    int rpi = find_pane_by_kind(BT_REVISIONS);
     if (rpi < 0) return;
 
     int buf_idx    = E.panes[rpi].buf_idx;
@@ -3261,11 +3157,7 @@ static void rev_close_pane(void) {
 
     /* Free the revisions buffer. */
     if (rev_active) {
-        for (int i = 0; i < E.buf.numrows; i++) {
-            free(E.buf.rows[i].chars);
-            free(E.buf.rows[i].hl);
-        }
-        free(E.buf.rows);
+        buf_clear_rows(&E.buf);
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
     } else {
@@ -3281,20 +3173,7 @@ static void rev_close_pane(void) {
     if (cpane > rpi) cpane--;
 
     /* Activate content pane. */
-    if (cpane >= 0) {
-        int donor_buf = E.panes[cpane].buf_idx;
-        if (E.cur_buftab != donor_buf) {
-            editor_buf_restore(donor_buf);
-            E.cur_buftab = donor_buf;
-        }
-        E.cur_pane   = cpane;
-        E.screenrows = E.panes[cpane].height;
-        E.screencols = E.panes[cpane].width;
-        E.cx     = E.panes[cpane].cx;
-        E.cy     = E.panes[cpane].cy;
-        E.rowoff = E.panes[cpane].rowoff;
-        E.coloff = E.panes[cpane].coloff;
-    }
+    if (cpane >= 0) pane_restore_focus(cpane);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
@@ -3303,7 +3182,7 @@ static void rev_close_pane(void) {
 
 static void rev_open_pane(void) {
     /* Close existing revisions pane if open (toggle). */
-    if (rev_pane_idx() >= 0) { rev_close_pane(); return; }
+    if (find_pane_by_kind(BT_REVISIONS) >= 0) { rev_close_pane(); return; }
 
     if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
@@ -3413,7 +3292,7 @@ static void rev_open_pane(void) {
 }
 
 static void rev_handle_key(int c) {
-    int rpi = rev_pane_idx();
+    int rpi = find_pane_by_kind(BT_REVISIONS);
     if (rpi < 0) return;
 
     if (c == 'q' || c == '\x1b') { rev_close_pane(); return; }
@@ -3964,11 +3843,7 @@ void editor_execute_command(void) {
                     commit_execute();
                 } else if (dq) {
                     /* Abort: close commit buffer without committing. */
-                    for (int i = 0; i < E.buf.numrows; i++) {
-                        free(E.buf.rows[i].chars);
-                        free(E.buf.rows[i].hl);
-                    }
-                    free(E.buf.rows);
+                    buf_clear_rows(&E.buf);
                     free(E.buf.git_signs);
                     memset(&E.buf, 0, sizeof(Buffer));
                     E.buf.hl_dirty_from = INT_MAX;
@@ -4285,7 +4160,7 @@ void editor_execute_command(void) {
 
     /* ── :copen ─────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "copen") == 0) {
-        if (qf_pane_idx() >= 0) { status_err("Quickfix already open"); goto done; }
+        if (find_pane_by_kind(BT_QF) >= 0) { status_err("Quickfix already open"); goto done; }
         /* Find existing qf buftab to reopen. */
         int qi = -1;
         for (int i = 0; i < E.num_buftabs; i++)
@@ -4296,13 +4171,13 @@ void editor_execute_command(void) {
 
     /* ── :cclose ────────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "cclose") == 0 || strcmp(cmd, "ccl") == 0) {
-        if (qf_pane_idx() < 0) { status_err("No quickfix pane"); goto done; }
+        if (find_pane_by_kind(BT_QF) < 0) { status_err("No quickfix pane"); goto done; }
         qf_close_pane();
         goto done;
 
     /* ── :cn / :cp ──────────────────────────────────────────────────── */
     } else if (strcmp(cmd, "cn") == 0 || strcmp(cmd, "cnext") == 0) {
-        int qpi = qf_pane_idx();
+        int qpi = find_pane_by_kind(BT_QF);
         if (qpi < 0) { status_err("No quickfix list"); goto done; }
         QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
         if (ql && ql->selected < ql->count - 1) qf_jump(ql->selected + 1);
@@ -4310,7 +4185,7 @@ void editor_execute_command(void) {
         goto done;
 
     } else if (strcmp(cmd, "cp") == 0 || strcmp(cmd, "cprev") == 0) {
-        int qpi = qf_pane_idx();
+        int qpi = find_pane_by_kind(BT_QF);
         if (qpi < 0) { status_err("No quickfix list"); goto done; }
         QfList *ql = E.buftabs[E.panes[qpi].buf_idx].qf;
         if (ql && ql->selected > 0) qf_jump(ql->selected - 1);
@@ -4618,9 +4493,7 @@ done:
    entry is the key that triggered insert ('i', 'a', 'A', 'o', 'O'). */
 static void enter_insert_mode(char entry) {
     if (E.readonly) { status_err("Read-only mode"); return; }
-    E.pre_insert_snapshot = editor_capture_state();
-    E.pre_insert_dirty    = E.buf.dirty;
-    E.has_pre_insert      = 1;
+    pre_insert_capture();
     E.mode                = MODE_INSERT;
     E.insert_entry        = entry;
     insert_rec_reset();
