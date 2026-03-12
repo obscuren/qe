@@ -14,6 +14,9 @@
 #include "syntax.h"
 #include "tree.h"
 
+#define DIFFSTYLE_UNIFIED 0
+#define DIFFSTYLE_SPLIT   1
+
 #define MAX_BUFS  32
 #define MAX_PANES  8
 #define JUMP_MAX  100
@@ -36,6 +39,7 @@ typedef enum {
     BT_QF,          /* quickfix list                      */
     BT_BLAME,       /* git blame view                     */
     BT_DIFF,        /* HEAD diff view                     */
+    BT_DIFF_SPLIT,  /* HEAD side of split diff view       */
     BT_COMMIT,      /* git commit message buffer          */
     BT_SHOW,        /* git-show commit view               */
     BT_LOG,         /* git log buffer                     */
@@ -105,6 +109,7 @@ typedef struct {
     int autopairs;        /* 1 = auto-close (){}[]""'' in insert mode        */
     int cursorline;       /* 1 = highlight cursor line background             */
     int scrolloff;        /* min lines visible above/below cursor (default 0) */
+    int diffstyle;        /* DIFFSTYLE_UNIFIED (default) or DIFFSTYLE_SPLIT   */
 } EditorOptions;
 
 typedef struct {

@@ -81,6 +81,11 @@ static int l_set_option(lua_State *LS) {
     } else if (strcmp(name, "scrolloff") == 0) {
         int so = (int)luaL_checkinteger(LS, 2);
         E.opts.scrolloff = so >= 0 ? so : 0;
+    } else if (strcmp(name, "diffstyle") == 0) {
+        const char *val = luaL_checkstring(LS, 2);
+        if (strcmp(val, "unified") == 0)      E.opts.diffstyle = DIFFSTYLE_UNIFIED;
+        else if (strcmp(val, "split") == 0)   E.opts.diffstyle = DIFFSTYLE_SPLIT;
+        else luaL_error(LS, "diffstyle must be \"unified\" or \"split\"");
     } else {
         luaL_error(LS, "unknown option: %s", name);
     }

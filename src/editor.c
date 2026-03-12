@@ -38,6 +38,7 @@ void editor_init(void) {
     E.opts.autopairs        = 1;
     E.opts.cursorline       = 1;
     E.opts.scrolloff        = 0;
+    E.opts.diffstyle        = DIFFSTYLE_UNIFIED;
 
     buf_init(&E.buf);
 
