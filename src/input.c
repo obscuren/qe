@@ -8,6 +8,7 @@
 #include "search.h"
 #include "term_emu.h"
 #include "tree.h"
+#include "undofile.h"
 #include "utils.h"
 
 #include <ctype.h>
@@ -3790,6 +3791,10 @@ void editor_load_session(const char *path) {
                     buf_free(&E.buf);
                     buf_open(&E.buf, fname);
                     editor_detect_syntax();
+                    /* Restore persisted undo history. */
+                    UndoTree loaded = {0};
+                    if (undofile_load(fname, &loaded) == 0)
+                        E.undo_tree = loaded;
                     filewatcher_add(E.cur_buftab);
                     E.cy = cy; E.cx = cx;
                     if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
@@ -3797,6 +3802,10 @@ void editor_load_session(const char *path) {
                     first = 0;
                 } else {
                     open_new_buf(fname);
+                    /* Restore persisted undo history. */
+                    UndoTree uloaded = {0};
+                    if (undofile_load(fname, &uloaded) == 0)
+                        E.undo_tree = uloaded;
                     /* Restore cursor position in the newly opened buffer. */
                     E.cy = cy; E.cx = cx;
                     if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
@@ -4057,6 +4066,7 @@ void editor_execute_command(void) {
                             status_err("Cannot write \"%s\"", E.buf.filename);
                             errs++;
                         } else {
+                            undofile_save(E.buf.filename, &E.undo_tree);
                             E.buftabs[E.cur_buftab].watch_skip++;
                             filewatcher_add(E.cur_buftab);
                         }
@@ -4072,6 +4082,7 @@ void editor_execute_command(void) {
                                 status_err("Cannot write \"%s\"", b->filename);
                                 errs++;
                             } else {
+                                undofile_save(b->filename, &E.buftabs[i].undo_tree);
                                 E.buftabs[i].watch_skip++;
                                 filewatcher_add(i);
                             }
@@ -4096,6 +4107,7 @@ void editor_execute_command(void) {
                     }
                     if (buf_save(&E.buf) == 0) {
                         editor_update_git_signs();
+                        undofile_save(E.buf.filename, &E.undo_tree);
                         E.buftabs[E.cur_buftab].watch_skip++;
                         filewatcher_add(E.cur_buftab);
                         if (!dq) status_msg("\"%s\" written", E.buf.filename);
@@ -4580,6 +4592,14 @@ void editor_execute_command(void) {
     } else if (strncmp(cmd, "mksession", 9) == 0 &&
                (cmd[9] == '\0' || cmd[9] == ' ')) {
         const char *path = (cmd[9] == ' ' && cmd[10]) ? cmd + 10 : "Session.qe";
+        /* Persist undo history for all buffers before saving session. */
+        if (E.buf.filename)
+            undofile_save(E.buf.filename, &E.undo_tree);
+        for (int si = 0; si < E.num_buftabs; si++) {
+            if (si == E.cur_buftab) continue;
+            if (E.buftabs[si].buf.filename && E.buftabs[si].kind == BT_NORMAL)
+                undofile_save(E.buftabs[si].buf.filename, &E.buftabs[si].undo_tree);
+        }
         editor_save_session(path);
         goto done;
 

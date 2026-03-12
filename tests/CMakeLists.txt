@@ -11,6 +11,7 @@ add_test(NAME buf COMMAND test_buf)
 add_executable(test_undo
     test_undo.c
     ${CMAKE_SOURCE_DIR}/src/undo.c
+    ${CMAKE_SOURCE_DIR}/src/undofile.c
     ${CMAKE_SOURCE_DIR}/src/buf.c
     ${CMAKE_SOURCE_DIR}/src/editor.c
     ${CMAKE_SOURCE_DIR}/src/git.c
@@ -44,6 +45,16 @@ target_include_directories(test_syntax PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_syntax PRIVATE unity)
 add_test(NAME syntax COMMAND test_syntax)
 
+add_executable(test_undofile
+    test_undofile.c
+    ${CMAKE_SOURCE_DIR}/src/undofile.c
+    ${CMAKE_SOURCE_DIR}/src/undo.c
+    ${CMAKE_SOURCE_DIR}/src/utils.c
+)
+target_include_directories(test_undofile PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_undofile PRIVATE unity)
+add_test(NAME undofile COMMAND test_undofile)
+
 add_executable(test_render
     test_render.c
     ${CMAKE_SOURCE_DIR}/src/render.c
@@ -55,6 +66,7 @@ add_executable(test_render
     ${CMAKE_SOURCE_DIR}/src/utils.c
     ${CMAKE_SOURCE_DIR}/src/terminal.c
     ${CMAKE_SOURCE_DIR}/src/undo.c
+    ${CMAKE_SOURCE_DIR}/src/undofile.c
     ${CMAKE_SOURCE_DIR}/src/fuzzy.c
     ${CMAKE_SOURCE_DIR}/src/search.c
     ${CMAKE_SOURCE_DIR}/src/qf.c
