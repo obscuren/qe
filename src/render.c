@@ -463,6 +463,7 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int is_qf        = E.buftabs[p->buf_idx].kind == BT_QF;
     int is_blame     = E.buftabs[p->buf_idx].kind == BT_BLAME;
     int is_diff      = E.buftabs[p->buf_idx].kind == BT_DIFF;
+    int is_diff_split = E.buftabs[p->buf_idx].kind == BT_DIFF_SPLIT;
     int is_commit    = E.buftabs[p->buf_idx].kind == BT_COMMIT;
     int is_log       = E.buftabs[p->buf_idx].kind == BT_LOG;
     int is_show      = E.buftabs[p->buf_idx].kind == BT_SHOW;
@@ -473,8 +474,14 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int content_cols = p->width - gw;
 
     /* Determine if this pane should show diff background highlighting.
-       True for the diff pane itself and for git-show commit views. */
-    int show_diff_bg = is_diff || is_show;
+       True for diff panes (unified/split), split-diff source panes, and git-show views. */
+    int is_split_source = 0;
+    if (!is_diff_split) {
+        for (int si = 0; si < E.num_buftabs; si++)
+            if (E.buftabs[si].kind == BT_DIFF_SPLIT &&
+                E.buftabs[si].diff_source_buf == p->buf_idx) { is_split_source = 1; break; }
+    }
+    int show_diff_bg = is_diff || is_show || is_diff_split || is_split_source;
 
     /* Cascade hl_open_comment for dirty rows. */
     if (syn && buf->hl_dirty_from < buf->numrows) {
@@ -1054,6 +1061,16 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
         return;
     }
 
+    /* Split diff HEAD pane: compact status. */
+    if (E.buftabs[p->buf_idx].kind == BT_DIFF_SPLIT) {
+        const char *fname = buf->filename ? buf->filename : "[No Name]";
+        char left[128], right[16];
+        int llen = snprintf(left, sizeof(left), " [Diff HEAD] %.30s", fname);
+        int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
+        status_bar_simple(ab, p, is_active, left, llen, right, rlen);
+        return;
+    }
+
     /* Commit buffer: status bar. */
     if (E.buftabs[p->buf_idx].kind == BT_COMMIT) {
         char left[128], right[16];
@@ -1448,8 +1465,9 @@ static void linked_pane_sync_scroll(void) {
     for (int i = 0; i < E.num_panes; i++) {
         BufTab *bt = &E.buftabs[E.panes[i].buf_idx];
         int src_buf;
-        if (bt->kind == BT_BLAME)     src_buf = bt->blame_source_buf;
-        else if (bt->kind == BT_DIFF) src_buf = bt->diff_source_buf;
+        if (bt->kind == BT_BLAME)          src_buf = bt->blame_source_buf;
+        else if (bt->kind == BT_DIFF)      src_buf = bt->diff_source_buf;
+        else if (bt->kind == BT_DIFF_SPLIT) src_buf = bt->diff_source_buf;
         else continue;
         /* Find the source pane. */
         for (int j = 0; j < E.num_panes; j++) {

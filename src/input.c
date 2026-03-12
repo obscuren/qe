@@ -2487,7 +2487,171 @@ static void commit_execute(void) {
 
 
 
+/* ── Split diff (side-by-side) ────────────────────────────────────────── */
+
+static void diff_close_split(void) {
+    int hpi = find_pane_by_kind(BT_DIFF_SPLIT);
+    if (hpi < 0) return;
+
+    Pane *hp = &E.panes[hpi];
+    int buf_idx = hp->buf_idx;
+    int head_left  = hp->left;
+    int head_width = hp->width;
+
+    /* Find source pane to the right and expand it. */
+    int cpane = -1;
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i != hpi && E.panes[i].left == head_left + head_width + 1) {
+            cpane = i; break;
+        }
+    }
+    if (cpane >= 0) {
+        E.panes[cpane].left   = head_left;
+        E.panes[cpane].width += head_width + 1;
+    }
+
+    /* Clear diff signs from source buffer. */
+    int src_buf = E.buftabs[buf_idx].diff_source_buf;
+    if (src_buf == E.cur_buftab) {
+        free(E.buf.git_signs);
+        E.buf.git_signs       = NULL;
+        E.buf.git_signs_count = 0;
+    } else {
+        free(E.buftabs[src_buf].buf.git_signs);
+        E.buftabs[src_buf].buf.git_signs       = NULL;
+        E.buftabs[src_buf].buf.git_signs_count = 0;
+    }
+
+    /* Free HEAD buffer. */
+    if (E.cur_pane == hpi) {
+        buf_clear_rows(&E.buf);
+        free(E.buf.git_signs);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+    } else {
+        pane_save_cursor();
+        buf_free(&E.buftabs[buf_idx].buf);
+    }
+    buftab_reset(&E.buftabs[buf_idx]);
+
+    /* Remove HEAD pane. */
+    for (int i = hpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
+    E.num_panes--;
+    if (cpane > hpi) cpane--;
+
+    /* Activate the source pane. */
+    if (cpane >= 0) pane_restore_focus(cpane);
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+}
+
+static void diff_open_split(void) {
+    /* Toggle off if already open. */
+    if (find_pane_by_kind(BT_DIFF_SPLIT) >= 0) { diff_close_split(); return; }
+
+    if (!E.buf.filename) { status_err("No filename"); return; }
+    if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
+    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
+
+    Pane *sp = &E.panes[E.cur_pane];
+    if (sp->width < 30) { status_err("Pane too narrow for split diff"); return; }
+
+    /* Get HEAD content. */
+    int head_count = 0;
+    char **head_lines = git_show_head(E.buf.filename, &head_count);
+    if (!head_lines || head_count == 0) {
+        status_err("git show HEAD failed (file committed?)");
+        return;
+    }
+
+    /* Compute diff signs for both sides. */
+    GitLines gl_new = git_lines_from_buf(&E.buf);
+    GitLines gl_old = { .count = head_count };
+    gl_old.chars = malloc(sizeof(char *) * head_count);
+    gl_old.lens  = malloc(sizeof(int)    * head_count);
+    for (int i = 0; i < head_count; i++) {
+        gl_old.chars[i] = head_lines[i];
+        gl_old.lens[i]  = (int)strlen(head_lines[i]);
+    }
+
+    char *new_signs = NULL, *old_signs = NULL;
+    git_diff_signs_both(E.buf.filename, &gl_new, &gl_old,
+                        &new_signs, &old_signs);
+    git_lines_free(&gl_new);
+
+    /* Allocate HEAD buftab. */
+    int hidx = E.num_buftabs++;
+    buftab_reset(&E.buftabs[hidx]);
+    E.buftabs[hidx].kind = BT_DIFF_SPLIT;
+    E.buftabs[hidx].diff_source_buf = E.cur_buftab;
+    E.buftabs[hidx].syntax = syntax_detect(E.buf.filename);
+    buf_init(&E.buftabs[hidx].buf);
+
+    /* Populate HEAD buffer rows. */
+    for (int i = 0; i < head_count; i++) {
+        int len = (int)strlen(head_lines[i]);
+        buf_insert_row(&E.buftabs[hidx].buf, i, head_lines[i], len);
+        free(head_lines[i]);
+    }
+    free(head_lines);
+    E.buftabs[hidx].buf.dirty = 0;
+    E.buftabs[hidx].buf.filename = strdup(E.buf.filename);
+
+    /* Assign git signs to HEAD buffer. */
+    E.buftabs[hidx].buf.git_signs       = old_signs;
+    E.buftabs[hidx].buf.git_signs_count = old_signs ? head_count : 0;
+
+    /* Apply new_signs to source buffer. */
+    free(E.buf.git_signs);
+    E.buf.git_signs       = new_signs;
+    E.buf.git_signs_count = new_signs ? E.buf.numrows : 0;
+
+    /* Create vertical split: HEAD left (50%), source right. */
+    int src_idx = E.cur_pane;
+    pane_save_cursor();
+    editor_buf_save(E.cur_buftab);
+
+    sp = &E.panes[src_idx];  /* re-fetch */
+    int old_left = sp->left;
+    int half_w   = sp->width / 2;
+    sp->left  = old_left + half_w + 1;
+    sp->width -= (half_w + 1);
+
+    /* Insert HEAD pane before source pane. */
+    for (int i = E.num_panes; i > src_idx; i--) E.panes[i] = E.panes[i - 1];
+    E.num_panes++;
+    src_idx++;  /* source pane shifted right */
+
+    Pane *hp = &E.panes[src_idx - 1];
+    hp->top     = E.panes[src_idx].top;
+    hp->left    = old_left;
+    hp->height  = E.panes[src_idx].height;
+    hp->width   = half_w;
+    hp->buf_idx = hidx;
+    hp->cx      = 0;
+    hp->cy      = E.cy;
+    hp->rowoff  = E.rowoff;
+    hp->coloff  = 0;
+
+    /* Keep focus on source (right) pane. */
+    E.cur_pane   = src_idx;
+    E.screenrows = E.panes[src_idx].height;
+    E.screencols = E.panes[src_idx].width;
+    E.cur_buftab = E.panes[src_idx].buf_idx;
+    editor_buf_restore(E.cur_buftab);
+    E.mode = MODE_NORMAL;
+    E.match_bracket_valid = 0;
+
+    if (E.last_content_pane >= src_idx - 1) E.last_content_pane++;
+
+    free(gl_old.chars);
+    free(gl_old.lens);
+}
+
 static void diff_close(void) {
+    /* Route to split close if a split diff is active. */
+    if (find_pane_by_kind(BT_DIFF_SPLIT) >= 0) { diff_close_split(); return; }
+
     int dpi = find_pane_by_kind(BT_DIFF);
     if (dpi < 0) return;
 
@@ -2516,6 +2680,9 @@ static void diff_close(void) {
 }
 
 static void diff_open(void) {
+    /* Route to split mode if configured. */
+    if (E.opts.diffstyle == DIFFSTYLE_SPLIT) { diff_open_split(); return; }
+
     /* Toggle off if already open. */
     if (find_pane_by_kind(BT_DIFF) >= 0) { diff_close(); return; }
 
@@ -4969,6 +5136,23 @@ static void editor_process_normal(int c) {
     /* Diff pane (HEAD): read-only, navigation + q to close. */
     if (E.buftabs[E.cur_buftab].kind == BT_DIFF) {
         if (c == 'q' || c == '\x1b') { diff_close(); return; }
+        if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
+            E.cy++;
+            if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+        } else if ((c == ARROW_UP || c == 'k') && E.cy > 0) {
+            E.cy--;
+            if (E.cy < E.rowoff) E.rowoff = E.cy;
+        } else if (c == 'G') {
+            E.cy = E.buf.numrows - 1;
+        } else if (c == 'g') {
+            E.cy = 0; E.rowoff = 0;
+        }
+        return;
+    }
+
+    /* Split diff HEAD pane: read-only, navigation + q to close. */
+    if (E.buftabs[E.cur_buftab].kind == BT_DIFF_SPLIT) {
+        if (c == 'q' || c == '\x1b') { diff_close_split(); return; }
         if ((c == ARROW_DOWN || c == 'j') && E.cy < E.buf.numrows - 1) {
             E.cy++;
             if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
