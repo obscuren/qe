@@ -3954,6 +3954,24 @@ static int subst_row(Row *row, const SearchQuery *q,
 void editor_execute_command(void) {
     const char *cmd = E.cmdbuf;
 
+    /* ── :N — goto line ─────────────────────────────────────────────── */
+    if (cmd[0] >= '1' && cmd[0] <= '9') {
+        const char *p = cmd;
+        while (*p >= '0' && *p <= '9') p++;
+        if (*p == '\0') {
+            int line = atoi(cmd) - 1;
+            if (E.buf.numrows > 0) {
+                jump_push();
+                E.cy = line;
+                if (E.cy >= E.buf.numrows)
+                    E.cy = E.buf.numrows - 1;
+                if (E.cy < 0) E.cy = 0;
+                E.cx = 0;
+            }
+            goto done;
+        }
+    }
+
     /* ── w/q/a/! compound family ──────────────────────────────────────
        Parses any combination of:
          [w][q][a][!][ filename]

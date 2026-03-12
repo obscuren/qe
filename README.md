@@ -350,6 +350,7 @@ All normal-mode motion keys (`h j k l`, `w e b`, `0 $`, `G`, arrows, page keys) 
 | `:ls`            | List open buffers in status bar              |
 | `:buffers`       | Fuzzy buffer picker                          |
 | `<leader>b`      | Fuzzy buffer picker (default leader: Space)  |
+| `:N`             | Jump to line N (e.g. `:42`)                  |
 | `:set nu`        | Show line numbers                            |
 | `:set nonu`      | Hide line numbers                            |
 
