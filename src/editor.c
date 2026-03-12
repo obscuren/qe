@@ -220,6 +220,7 @@ void editor_buf_restore(int i) {
 const char *editor_find_file_arg(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '+' || strcmp(argv[i], "-R") == 0) continue;
+        if (strcmp(argv[i], "-s") == 0) { i++; continue; }
         return argv[i];
     }
     return NULL;

@@ -3762,7 +3762,7 @@ static void editor_save_session(const char *path) {
     status_msg("Session saved to %s", path);
 }
 
-static void editor_load_session(const char *path) {
+void editor_load_session(const char *path) {
     FILE *fp = fopen(path, "r");
     if (!fp) { status_err("Cannot read %s", path); return; }
 

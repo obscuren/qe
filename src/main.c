@@ -16,7 +16,8 @@ int main(int argc, char *argv[]) {
     lua_bridge_init();
 
     int start_line = 0, readonly = 0;
-    int cli_ret = cli_dispatch(argc, argv, &start_line, &readonly);
+    const char *session_file = NULL;
+    int cli_ret = cli_dispatch(argc, argv, &start_line, &readonly, &session_file);
 
     if (cli_ret == -2)
         return lua_bridge_cli(argv[1], argc, argv);
@@ -28,15 +29,19 @@ int main(int argc, char *argv[]) {
     filewatcher_init();
     E.readonly = readonly;
 
-    const char *file_arg = editor_find_file_arg(argc, argv);
-    if (file_arg) {
-        editor_open_file_arg(file_arg);
-        filewatcher_add(E.cur_buftab);
-    }
+    if (session_file) {
+        editor_load_session(session_file);
+    } else {
+        const char *file_arg = editor_find_file_arg(argc, argv);
+        if (file_arg) {
+            editor_open_file_arg(file_arg);
+            filewatcher_add(E.cur_buftab);
+        }
 
-    if (start_line > 0 && E.buf.numrows > 0) {
-        E.cy = start_line - 1;
-        if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+        if (start_line > 0 && E.buf.numrows > 0) {
+            E.cy = start_line - 1;
+            if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+        }
     }
 
     while (1) {
