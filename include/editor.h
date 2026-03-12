@@ -2,6 +2,7 @@
 #ifndef EDITOR_H
 #define EDITOR_H
 
+#include <sys/types.h>  /* pid_t */
 #include "buf.h"
 #include "fuzzy.h"
 
@@ -18,9 +19,23 @@
 #define DIFFSTYLE_SPLIT   1
 
 #define MAX_BUFS  32
+#define MAX_ASYNC_CMDS 8
+#define ASYNC_OUTPUT_MAX (64 * 1024)  /* 64KB output cap */
 #define MAX_PANES  8
 #define JUMP_MAX  100
 #define MARK_MAX  26
+
+typedef struct {
+    int    active;        /* 1 = slot in use */
+    pid_t  pid;           /* child process PID */
+    int    pipe_fd;       /* read end of stdout/stderr pipe */
+    char  *output;        /* accumulated output buffer */
+    int    output_len;    /* bytes written so far */
+    int    output_cap;    /* allocated capacity */
+    int    lua_cb_ref;    /* Lua registry reference for callback */
+    int    exited;        /* 1 = child has exited */
+    int    exit_status;   /* exit code from child */
+} AsyncCmd;
 
 typedef struct { int buf_idx, row, col; } JumpEntry;
 typedef struct { int valid, buf_idx, row, col; } Mark;
@@ -261,6 +276,10 @@ typedef struct {
     int  file_watch_fd;     /* file watching fd (inotify on Linux, kqueue on macOS), -1 = disabled */
     int  watch_prompt_buf;  /* buftab idx awaiting reload confirm, -1=none  */
     int  recovery_prompt_buf; /* buftab idx awaiting recovery confirm, -1=none */
+
+    /* Async Lua commands */
+    AsyncCmd async_cmds[MAX_ASYNC_CMDS];
+    int      num_async_cmds;
 } EditorConfig;
 
 extern EditorConfig E;
