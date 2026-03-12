@@ -260,6 +260,7 @@ typedef struct {
     /* File watching (inotify on Linux, kqueue on macOS) */
     int  file_watch_fd;     /* file watching fd (inotify on Linux, kqueue on macOS), -1 = disabled */
     int  watch_prompt_buf;  /* buftab idx awaiting reload confirm, -1=none  */
+    int  recovery_prompt_buf; /* buftab idx awaiting recovery confirm, -1=none */
 } EditorConfig;
 
 extern EditorConfig E;

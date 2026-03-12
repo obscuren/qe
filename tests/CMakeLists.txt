@@ -55,6 +55,17 @@ target_include_directories(test_undofile PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_undofile PRIVATE unity)
 add_test(NAME undofile COMMAND test_undofile)
 
+add_executable(test_recovery
+    test_recovery.c
+    ${CMAKE_SOURCE_DIR}/src/recovery.c
+    ${CMAKE_SOURCE_DIR}/src/buf.c
+    ${CMAKE_SOURCE_DIR}/src/utils.c
+)
+target_include_directories(test_recovery PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_recovery PRIVATE QE_TEST)
+target_link_libraries(test_recovery PRIVATE unity)
+add_test(NAME recovery COMMAND test_recovery)
+
 add_executable(test_render
     test_render.c
     ${CMAKE_SOURCE_DIR}/src/render.c

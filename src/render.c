@@ -1618,7 +1618,10 @@ void editor_refresh_screen(void) {
                        ap->left + (vcx - E.coloff) + gutter_width());
     }
     ab_append(&ab, buf, len);
-    ab_append(&ab, "\x1b[?25h",   6); /* show cursor */
+    if (E.recovery_prompt_buf >= 0)
+        ab_append(&ab, "\x1b[?25l",   6); /* hide cursor during recovery prompt */
+    else
+        ab_append(&ab, "\x1b[?25h",   6); /* show cursor */
     ab_append(&ab, "\x1b[?2026l", 8); /* end synchronized update */
 
     write(STDOUT_FILENO, ab.b, ab.len);
