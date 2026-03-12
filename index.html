@@ -150,8 +150,8 @@
 
         <div class="feature-card fade-up">
             <div class="feature-icon">lua</div>
-            <h3>Lua Config</h3>
-            <p>Full Lua scripting via <code>~/.config/qe/init.lua</code>. Set options, bind keys, add syntax definitions, register CLI subcommands. Lua bindings override built-in keys.</p>
+            <h3>Lua API</h3>
+            <p>Scriptable via a full Lua API. Configure options, bind keys, define syntax, react to editor events, query git state, manipulate buffers, and run shell commands &mdash; sync or async. Build plugins from formatters to build systems.</p>
         </div>
 
         <div class="feature-card fade-up">
@@ -295,21 +295,35 @@ sudo cmake --install build    <span class="comment"># installs to /usr/local/bin
         </div>
 
         <div class="doc-section">
-            <h3>Lua Configuration</h3>
-            <pre><code><span class="comment">-- ~/.config/qe/init.lua</span>
-qe.set_option(<span class="str">"tabwidth"</span>, <span class="num">4</span>)
-qe.set_option(<span class="str">"autoindent"</span>, <span class="kw">true</span>)
-
-qe.bind_key(<span class="str">"n"</span>, <span class="str">"W"</span>, <span class="kw">function</span>()
-    qe.command(<span class="str">"w"</span>)
+            <h3>Lua API</h3>
+            <p style="margin-bottom:0.75em;font-size:0.9em;opacity:0.75">Configure and extend qe through <code>~/.config/qe/init.lua</code>. The <code>qe</code> global exposes the full API.</p>
+            <table>
+                <tr><td><code>qe.set_option(k, v)</code></td><td>Set editor option</td></tr>
+                <tr><td><code>qe.bind_key(mode, key, fn)</code></td><td>Bind a key to a Lua function</td></tr>
+                <tr><td><code>qe.get_line([row])</code></td><td>Read a buffer line</td></tr>
+                <tr><td><code>qe.set_line(row, text)</code></td><td>Replace a buffer line</td></tr>
+                <tr><td><code>qe.get_cursor()</code></td><td>Returns <code>row, col</code></td></tr>
+                <tr><td><code>qe.on(event, fn)</code></td><td>Hook into editor events</td></tr>
+                <tr><td><code>qe.git_branch()</code></td><td>Current branch name</td></tr>
+                <tr><td><code>qe.exec(cmd)</code></td><td>Run shell command (sync)</td></tr>
+                <tr><td><code>qe.exec_async(cmd, fn)</code></td><td>Run shell command (async)</td></tr>
+                <tr><td><code>qe.add_syntax(def)</code></td><td>Register syntax highlighting</td></tr>
+                <tr><td><code>qe.add_command(name, fn)</code></td><td>Register a CLI subcommand</td></tr>
+            </table>
+            <pre style="margin-top:0.75em"><code><span class="comment">-- Auto-format Go files on save</span>
+qe.on(<span class="str">"BufSave"</span>, <span class="kw">function</span>(f)
+    <span class="kw">if</span> f:match(<span class="str">"%.go$"</span>) <span class="kw">then</span>
+        <span class="kw">local</span> _, code = qe.exec(<span class="str">"gofmt -w "</span> .. f)
+        <span class="kw">if</span> code == <span class="num">0</span> <span class="kw">then</span> qe.command(<span class="str">"e "</span> .. f) <span class="kw">end</span>
+    <span class="kw">end</span>
 <span class="kw">end</span>)
 
-qe.add_syntax({
-    filetypes = {<span class="str">"c"</span>, <span class="str">"h"</span>},
-    keywords  = {<span class="str">"if"</span>, <span class="str">"else"</span>, <span class="str">"return"</span>},
-    types     = {<span class="str">"int"</span>, <span class="str">"char"</span>, <span class="str">"void"</span>},
-    comment_single = <span class="str">"//"</span>,
-})</code></pre>
+<span class="comment">-- Async background build</span>
+qe.bind_key(<span class="str">"n"</span>, <span class="str">"&lt;leader&gt;m"</span>, <span class="kw">function</span>()
+    qe.exec_async(<span class="str">"make -j4"</span>, <span class="kw">function</span>(out, code)
+        qe.print(code == <span class="num">0</span> <span class="kw">and</span> <span class="str">"Build OK"</span> <span class="kw">or</span> <span class="str">"Build failed"</span>)
+    <span class="kw">end</span>)
+<span class="kw">end</span>)</code></pre>
         </div>
 
         <div class="doc-section">
