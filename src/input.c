@@ -4863,6 +4863,9 @@ void editor_execute_command(void) {
         editor_load_session(path);
         goto done;
 
+    } else if (strncmp(cmd, "lua ", 4) == 0) {
+        lua_bridge_exec(cmd + 4);
+
     } else {
         /* ── :s / :%s / :N,Ms — substitute ──────────────────────────── */
         const char *pat; int pat_len;
