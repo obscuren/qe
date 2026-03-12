@@ -71,6 +71,17 @@ int git_commit(const char *message, char *output, int outlen);
 /* Return a malloc'd string with `git diff --cached --stat` output, or NULL. */
 char *git_staged_summary(void);
 
+/* Lists of staged and unstaged filenames from `git status --porcelain`. */
+typedef struct {
+    char **staged;
+    int    staged_count;
+    char **unstaged;
+    int    unstaged_count;
+} GitStatus;
+
+GitStatus git_status_files(void);
+void      git_status_free(GitStatus *st);
+
 /* Parse a hunk header line: "@@ -old_start[,old_count] +new_start[,new_count] @@"
    Returns 1 on success. */
 int parse_hunk(const char *line, int *old_start, int *old_count,

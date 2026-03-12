@@ -375,6 +375,84 @@ char *git_staged_summary(void) {
     return buf;
 }
 
+/* ── Status files ────────────────────────────────────────────────────── */
+
+GitStatus git_status_files(void) {
+    GitStatus st = { NULL, 0, NULL, 0 };
+    FILE *fp = popen("git status --porcelain 2>/dev/null", "r");
+    if (!fp) return st;
+
+    int scap = 32, ucap = 32;
+    st.staged   = malloc(sizeof(char *) * scap);
+    st.unstaged = malloc(sizeof(char *) * ucap);
+    if (!st.staged || !st.unstaged) {
+        free(st.staged); free(st.unstaged);
+        st.staged = st.unstaged = NULL;
+        pclose(fp);
+        return st;
+    }
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+        if (len < 4) continue;  /* minimum: "XY f" */
+
+        char x = line[0];  /* index status */
+        char y = line[1];  /* worktree status */
+        const char *fname = line + 3;
+
+        /* Handle renames: "R  old -> new" — use the new name. */
+        const char *arrow = strstr(fname, " -> ");
+        if (arrow) fname = arrow + 4;
+
+        /* Staged: X is not ' ' and not '?' */
+        if (x != ' ' && x != '?') {
+            if (st.staged_count >= scap) {
+                scap *= 2;
+                char **tmp = realloc(st.staged, sizeof(char *) * scap);
+                if (!tmp) break;
+                st.staged = tmp;
+            }
+            st.staged[st.staged_count++] = strdup(fname);
+        }
+
+        /* Unstaged: Y is not ' ' and not '?' */
+        if (y != ' ' && y != '?') {
+            if (st.unstaged_count >= ucap) {
+                ucap *= 2;
+                char **tmp = realloc(st.unstaged, sizeof(char *) * ucap);
+                if (!tmp) break;
+                st.unstaged = tmp;
+            }
+            st.unstaged[st.unstaged_count++] = strdup(fname);
+        }
+
+        /* Untracked files (??): show as unstaged */
+        if (x == '?' && y == '?') {
+            if (st.unstaged_count >= ucap) {
+                ucap *= 2;
+                char **tmp = realloc(st.unstaged, sizeof(char *) * ucap);
+                if (!tmp) break;
+                st.unstaged = tmp;
+            }
+            st.unstaged[st.unstaged_count++] = strdup(fname);
+        }
+    }
+    pclose(fp);
+    return st;
+}
+
+void git_status_free(GitStatus *st) {
+    for (int i = 0; i < st->staged_count; i++) free(st->staged[i]);
+    for (int i = 0; i < st->unstaged_count; i++) free(st->unstaged[i]);
+    free(st->staged);
+    free(st->unstaged);
+    st->staged = st->unstaged = NULL;
+    st->staged_count = st->unstaged_count = 0;
+}
+
 /* ── Hunk operations ─────────────────────────────────────────────────── */
 
 /* Helper: write buffer rows to a temp file, return fd (caller closes). */

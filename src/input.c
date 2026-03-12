@@ -1334,6 +1334,10 @@ static void visual_block_insert(int append) {
     enter_insert_mode('i');
 }
 
+/* Forward declarations for commit stage/unstage (defined later). */
+static int commit_stage_line(int row);
+static int commit_unstage_line(int row);
+
 static void editor_process_visual(int c) {
     if (lua_bridge_call_key(E.mode, c)) return;
 
@@ -1412,6 +1416,30 @@ static void editor_process_visual(int c) {
             }
             break;
         }
+
+        /* BT_COMMIT: +/- to stage/unstage visual selection. */
+        case '+':
+        case '-':
+            if (E.buftabs[E.cur_buftab].kind == BT_COMMIT) {
+                int ar = E.visual_anchor_row, cr = E.cy;
+                int r0 = ar < cr ? ar : cr;
+                int r1 = ar > cr ? ar : cr;
+                char marker = (c == '+') ? '-' : '+';
+                /* Collect matching lines from bottom to top so row indices stay valid. */
+                for (int i = r1; i >= r0; i--) {
+                    if (i >= E.buf.numrows) continue;
+                    Row *r = &E.buf.rows[i];
+                    if (r->len >= 2 && r->chars[0] == marker && r->chars[1] == ' ') {
+                        if (c == '+')
+                            commit_stage_line(i);
+                        else
+                            commit_unstage_line(i);
+                    }
+                }
+                if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+                E.mode = MODE_NORMAL;
+            }
+            break;
 
         /* Cursor movement — same keys as normal mode. */
         case 'f': case 'F': case 't': case 'T': {
@@ -2368,12 +2396,195 @@ static void log_handle_key(int c) {
 
 /* ── Git commit buffer ───────────────────────────────────────────────── */
 
-static void commit_open(void) {
-    /* Check for staged changes. */
-    char *summary = git_staged_summary();
-    if (!summary) { status_err("Nothing staged to commit"); return; }
+/* Commit undo stack for +/- staging actions. */
+typedef struct {
+    char *filename;
+    int   was_stage;  /* 1 = was a stage (+), 0 = was an unstage (-) */
+} CommitAction;
 
-    if (E.num_buftabs >= MAX_BUFS) { free(summary); status_err("Too many buffers"); return; }
+#define COMMIT_UNDO_MAX 256
+static CommitAction commit_undo_stack[COMMIT_UNDO_MAX];
+static int commit_undo_count;
+static int commit_undo_pos;
+
+static void commit_undo_reset(void) {
+    for (int i = 0; i < commit_undo_count; i++)
+        free(commit_undo_stack[i].filename);
+    commit_undo_count = 0;
+    commit_undo_pos = 0;
+}
+
+static void commit_undo_push(const char *filename, int was_stage) {
+    /* Discard any redo entries above current position. */
+    for (int i = commit_undo_pos; i < commit_undo_count; i++)
+        free(commit_undo_stack[i].filename);
+    commit_undo_count = commit_undo_pos;
+
+    if (commit_undo_count >= COMMIT_UNDO_MAX) return;
+    commit_undo_stack[commit_undo_count].filename = strdup(filename);
+    commit_undo_stack[commit_undo_count].was_stage = was_stage;
+    commit_undo_count++;
+    commit_undo_pos = commit_undo_count;
+}
+
+/* Find the row index of a line starting with the given header text. */
+static int commit_find_header(const char *header) {
+    for (int i = 0; i < E.buf.numrows; i++) {
+        Row *r = &E.buf.rows[i];
+        int hlen = (int)strlen(header);
+        if (r->len >= hlen && memcmp(r->chars, header, hlen) == 0)
+            return i;
+    }
+    return -1;
+}
+
+/* Find the last file entry row after a header (before next '#' line or EOF). */
+static int commit_section_end(int header_row) {
+    int last = header_row;
+    for (int i = header_row + 1; i < E.buf.numrows; i++) {
+        Row *r = &E.buf.rows[i];
+        if (r->len > 0 && r->chars[0] == '#') break;
+        last = i;
+    }
+    return last;
+}
+
+/* Stage the file on the given row (must be a '- ' line).
+   Moves the line from unstaged to staged section. Returns 1 on success. */
+static int commit_stage_line(int row) {
+    Row *r = &E.buf.rows[row];
+    if (r->len < 2 || r->chars[0] != '-' || r->chars[1] != ' ')
+        return 0;
+
+    char fname[512];
+    int flen = r->len - 2;
+    if (flen >= (int)sizeof(fname)) flen = (int)sizeof(fname) - 1;
+    memcpy(fname, r->chars + 2, flen);
+    fname[flen] = '\0';
+
+    if (!git_add(fname)) {
+        status_err("git add failed: %s", fname);
+        return 0;
+    }
+
+    /* Remove from unstaged section. */
+    buf_delete_row(&E.buf, row);
+
+    /* Find staged section and insert. */
+    int staged_hdr = commit_find_header("# Staged changes");
+    if (staged_hdr < 0) return 1;  /* shouldn't happen */
+    int ins = commit_section_end(staged_hdr) + 1;
+
+    char line[520];
+    int llen = snprintf(line, sizeof(line), "+ %s", fname);
+    buf_insert_row(&E.buf, ins, line, llen);
+
+    commit_undo_push(fname, 1);
+    return 1;
+}
+
+/* Unstage the file on the given row (must be a '+ ' line).
+   Moves the line from staged to unstaged section. Returns 1 on success. */
+static int commit_unstage_line(int row) {
+    Row *r = &E.buf.rows[row];
+    if (r->len < 2 || r->chars[0] != '+' || r->chars[1] != ' ')
+        return 0;
+
+    char fname[512];
+    int flen = r->len - 2;
+    if (flen >= (int)sizeof(fname)) flen = (int)sizeof(fname) - 1;
+    memcpy(fname, r->chars + 2, flen);
+    fname[flen] = '\0';
+
+    if (!git_reset(fname)) {
+        status_err("git reset failed: %s", fname);
+        return 0;
+    }
+
+    /* Remove from staged section. */
+    buf_delete_row(&E.buf, row);
+
+    /* Find unstaged section and insert. */
+    int unstaged_hdr = commit_find_header("# Unstaged changes");
+    if (unstaged_hdr < 0) return 1;
+    int ins = commit_section_end(unstaged_hdr) + 1;
+
+    char line[520];
+    int llen = snprintf(line, sizeof(line), "- %s", fname);
+    buf_insert_row(&E.buf, ins, line, llen);
+
+    commit_undo_push(fname, 0);
+    return 1;
+}
+
+/* Close the commit pane and reclaim its space. */
+static void commit_close(void) {
+    int cpi = find_pane_by_kind(BT_COMMIT);
+    if (cpi < 0) return;
+
+    Pane *cp = &E.panes[cpi];
+    int buf_idx = cp->buf_idx;
+
+    commit_undo_reset();
+
+    /* Expand the pane below to reclaim space. */
+    for (int i = 0; i < E.num_panes; i++) {
+        if (i == cpi) continue;
+        Pane *q = &E.panes[i];
+        if (q->left == cp->left && q->width == cp->width &&
+            cp->top + cp->height + 1 == q->top) {
+            q->top = cp->top;
+            q->height += cp->height + 1;
+            break;
+        }
+    }
+
+    /* Free commit buffer. */
+    if (E.cur_pane == cpi) {
+        buf_clear_rows(&E.buf);
+        free(E.buf.git_signs);
+        memset(&E.buf, 0, sizeof(Buffer));
+        E.buf.hl_dirty_from = INT_MAX;
+    } else {
+        buf_free(&E.buftabs[buf_idx].buf);
+    }
+    buftab_reset(&E.buftabs[buf_idx]);
+
+    /* Remove pane. */
+    for (int i = cpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
+    E.num_panes--;
+
+    /* Activate last content pane. */
+    int cpane = E.last_content_pane;
+    if (cpane >= E.num_panes || cpane < 0) cpane = 0;
+    if (E.cur_pane == cpi || E.cur_pane >= E.num_panes)
+        pane_restore_focus(cpane);
+    E.mode = MODE_NORMAL;
+}
+
+static void commit_open(void) {
+    /* Toggle: if already open, close it. */
+    if (find_pane_by_kind(BT_COMMIT) >= 0) { commit_close(); return; }
+
+    GitStatus st = git_status_files();
+    if (st.staged_count == 0 && st.unstaged_count == 0) {
+        git_status_free(&st);
+        status_err("No changes to commit");
+        return;
+    }
+
+    if (E.num_panes >= MAX_PANES) {
+        git_status_free(&st);
+        status_err("Too many panes");
+        return;
+    }
+    if (E.num_buftabs >= MAX_BUFS) {
+        git_status_free(&st);
+        status_err("Too many buffers");
+        return;
+    }
+
+    commit_undo_reset();
 
     /* Allocate commit buftab. */
     int cidx = E.num_buftabs++;
@@ -2381,37 +2592,77 @@ static void commit_open(void) {
     E.buftabs[cidx].kind = BT_COMMIT;
     buf_init(&E.buftabs[cidx].buf);
 
-    /* Populate with template. */
     Buffer *cb = &E.buftabs[cidx].buf;
-    buf_insert_row(cb, 0, "", 0);  /* blank line for message */
-    const char *sep = "# --- Staged changes ---";
-    buf_insert_row(cb, 1, sep, (int)strlen(sep));
+    int row = 0;
 
-    /* Add staged diff as comment lines. */
-    int row = 2;
-    const char *p = summary;
-    while (*p) {
-        const char *nl = strchr(p, '\n');
-        int len = nl ? (int)(nl - p) : (int)strlen(p);
-        char line[512];
-        int llen = snprintf(line, sizeof(line), "# %.*s", len, p);
+    /* Row 0: blank line for commit message. */
+    buf_insert_row(cb, row++, "", 0);
+
+    /* Help comment. */
+    const char *help = "# Gcommit: +/- stage/unstage, u/Ctrl-r undo/redo, :wq commit, :q abort";
+    buf_insert_row(cb, row++, help, (int)strlen(help));
+    buf_insert_row(cb, row++, "", 0);
+
+    /* Unstaged section. */
+    const char *uhdr = "# Unstaged changes";
+    buf_insert_row(cb, row++, uhdr, (int)strlen(uhdr));
+    buf_insert_row(cb, row++, "", 0);
+    for (int i = 0; i < st.unstaged_count; i++) {
+        char line[520];
+        int llen = snprintf(line, sizeof(line), "- %s", st.unstaged[i]);
         buf_insert_row(cb, row++, line, llen);
-        if (!nl) break;
-        p = nl + 1;
     }
-    free(summary);
+
+    buf_insert_row(cb, row++, "", 0);
+
+    /* Staged section. */
+    const char *shdr = "# Staged changes";
+    buf_insert_row(cb, row++, shdr, (int)strlen(shdr));
+    buf_insert_row(cb, row++, "", 0);
+    for (int i = 0; i < st.staged_count; i++) {
+        char line[520];
+        int llen = snprintf(line, sizeof(line), "+ %s", st.staged[i]);
+        buf_insert_row(cb, row++, line, llen);
+    }
+
+    git_status_free(&st);
     cb->dirty = 0;
 
-    /* Switch to commit buffer. */
+    /* Create top pane (1/3 height) above the current pane. */
     pane_save_cursor();
     editor_buf_save(E.cur_buftab);
-    E.panes[E.cur_pane].buf_idx = cidx;
-    E.cur_buftab = cidx;
-    editor_buf_restore(cidx);
+
+    Pane *sp = &E.panes[E.cur_pane];
+    int height = sp->height / 3;
+    if (height < 3) height = 3;
+    if (sp->height < height + 3) height = sp->height / 2;
+
+    int old_top = sp->top;
+
+    /* Shrink current pane downward to make room above. */
+    sp->top += height + 1;
+    sp->height -= (height + 1);
+
+    /* Insert commit pane after current (same pattern as log_open). */
+    int cpi = E.cur_pane + 1;
+    for (int i = E.num_panes; i > cpi; i--) E.panes[i] = E.panes[i - 1];
+    E.num_panes++;
+
+    /* Position the commit pane above the current pane. */
+    Pane *cp = &E.panes[cpi];
+    cp->top    = old_top;
+    cp->left   = sp->left;
+    cp->height = height;
+    cp->width  = sp->width;
+    cp->buf_idx = cidx;
+    cp->cx = 0; cp->cy = 0;
+    cp->rowoff = 0; cp->coloff = 0;
+
+    /* Activate the commit pane. */
+    E.panes[E.cur_pane].buf_idx = E.cur_buftab;
+    pane_activate(cpi);
     E.syntax = NULL;
-    E.mode = MODE_INSERT;  /* start in insert mode for convenience */
-    E.cy = 0; E.cx = 0;
-    E.rowoff = 0; E.coloff = 0;
+    E.mode = MODE_NORMAL;
 }
 
 /* Extract non-comment, non-empty lines from the commit buffer as the message. */
@@ -2423,6 +2674,8 @@ static char *commit_extract_message(void) {
     for (int i = 0; i < E.buf.numrows; i++) {
         Row *r = &E.buf.rows[i];
         if (r->len > 0 && r->chars[0] == '#') continue;  /* skip comments */
+        if (r->len >= 2 && (r->chars[0] == '-' || r->chars[0] == '+')
+            && r->chars[1] == ' ') continue;  /* skip file markers */
         /* Include the line (even if blank, for paragraph separation). */
         size_t need = len + r->len + 2;
         if (need > cap) {
@@ -2446,6 +2699,17 @@ static char *commit_extract_message(void) {
 }
 
 static void commit_execute(void) {
+    /* Verify at least one file is staged. */
+    int has_staged = 0;
+    for (int i = 0; i < E.buf.numrows; i++) {
+        Row *r = &E.buf.rows[i];
+        if (r->len >= 2 && r->chars[0] == '+' && r->chars[1] == ' ') {
+            has_staged = 1;
+            break;
+        }
+    }
+    if (!has_staged) { status_err("Nothing staged — use + to stage files"); return; }
+
     char *msg = commit_extract_message();
     if (!msg) { status_err("Empty commit message — aborting"); return; }
 
@@ -2454,25 +2718,8 @@ static void commit_execute(void) {
     free(msg);
 
     if (ok) {
-        /* Close commit buffer and return to previous buffer. */
-        buf_clear_rows(&E.buf);
-        free(E.buf.git_signs);
-        memset(&E.buf, 0, sizeof(Buffer));
-        E.buf.hl_dirty_from = INT_MAX;
-        buftab_reset(&E.buftabs[E.cur_buftab]);
-
-        /* Switch back to previous buffer (buftab 0 as fallback). */
-        int prev = 0;
-        for (int i = E.num_buftabs - 1; i >= 0; i--) {
-            if (i != E.cur_buftab && (E.buftabs[i].buf.rows ||
-                i == 0)) { prev = i; break; }
-        }
-        E.num_buftabs--;
-        E.cur_buftab = prev;
-        E.panes[E.cur_pane].buf_idx = prev;
-        editor_buf_restore(prev);
+        commit_close();
         editor_detect_syntax();
-        E.mode = MODE_NORMAL;
 
         /* Update git branch (might have changed) and gutter. */
         git_current_branch(E.git_branch, sizeof(E.git_branch));
@@ -4047,23 +4294,7 @@ void editor_execute_command(void) {
                 if (dw && dq) {
                     commit_execute();
                 } else if (dq) {
-                    /* Abort: close commit buffer without committing. */
-                    buf_clear_rows(&E.buf);
-                    free(E.buf.git_signs);
-                    memset(&E.buf, 0, sizeof(Buffer));
-                    E.buf.hl_dirty_from = INT_MAX;
-                    buftab_reset(&E.buftabs[E.cur_buftab]);
-                    int prev = 0;
-                    for (int i = E.num_buftabs - 1; i >= 0; i--) {
-                        if (i != E.cur_buftab && (E.buftabs[i].buf.rows ||
-                            i == 0)) { prev = i; break; }
-                    }
-                    E.num_buftabs--;
-                    E.cur_buftab = prev;
-                    E.panes[E.cur_pane].buf_idx = prev;
-                    editor_buf_restore(prev);
-                    editor_detect_syntax();
-                    E.mode = MODE_NORMAL;
+                    commit_close();
                     status_msg("Commit aborted");
                 } else if (dw) {
                     status_err("Use :wq to commit or :q to abort");
@@ -5279,6 +5510,167 @@ static void editor_process_normal(int c) {
     int raw_count = E.count;
     int n         = raw_count > 0 ? raw_count : 1;
     E.count       = 0;
+
+    /* BT_COMMIT: intercept +/- for staging and u/Ctrl-R for commit undo. */
+    if (E.buftabs[E.cur_buftab].kind == BT_COMMIT) {
+        if (c == '+') {
+            if (E.cy < E.buf.numrows) {
+                Row *r = &E.buf.rows[E.cy];
+                if (r->len >= 2 && r->chars[0] == '-' && r->chars[1] == ' ') {
+                    commit_stage_line(E.cy);
+                    if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+                }
+            }
+            return;
+        }
+        if (c == '-') {
+            if (E.cy < E.buf.numrows) {
+                Row *r = &E.buf.rows[E.cy];
+                if (r->len >= 2 && r->chars[0] == '+' && r->chars[1] == ' ') {
+                    commit_unstage_line(E.cy);
+                    if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+                }
+            }
+            return;
+        }
+        if (c == 'u') {
+            /* Commit undo: reverse last staging action. */
+            if (commit_undo_pos == 0) {
+                status_msg("Nothing to undo");
+            } else {
+                commit_undo_pos--;
+                CommitAction *a = &commit_undo_stack[commit_undo_pos];
+                if (a->was_stage) {
+                    /* Was a stage → unstage it. */
+                    if (!git_reset(a->filename)) {
+                        status_err("git reset failed: %s", a->filename);
+                        commit_undo_pos++;
+                        return;
+                    }
+                    /* Find '+ filename' in staged section and move to unstaged. */
+                    int staged_hdr = commit_find_header("# Staged changes");
+                    if (staged_hdr >= 0) {
+                        for (int i = staged_hdr + 1; i < E.buf.numrows; i++) {
+                            Row *r = &E.buf.rows[i];
+                            if (r->len > 0 && r->chars[0] == '#') break;
+                            if (r->len >= 2 && r->chars[0] == '+' && r->chars[1] == ' ') {
+                                int flen = (int)strlen(a->filename);
+                                if (r->len == flen + 2 && memcmp(r->chars + 2, a->filename, flen) == 0) {
+                                    buf_delete_row(&E.buf, i);
+                                    int unstaged_hdr = commit_find_header("# Unstaged changes");
+                                    if (unstaged_hdr >= 0) {
+                                        int ins = commit_section_end(unstaged_hdr) + 1;
+                                        char line[520];
+                                        int llen = snprintf(line, sizeof(line), "- %s", a->filename);
+                                        buf_insert_row(&E.buf, ins, line, llen);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    /* Was an unstage → re-stage it. */
+                    if (!git_add(a->filename)) {
+                        status_err("git add failed: %s", a->filename);
+                        commit_undo_pos++;
+                        return;
+                    }
+                    /* Find '- filename' in unstaged section and move to staged. */
+                    int unstaged_hdr = commit_find_header("# Unstaged changes");
+                    if (unstaged_hdr >= 0) {
+                        for (int i = unstaged_hdr + 1; i < E.buf.numrows; i++) {
+                            Row *r = &E.buf.rows[i];
+                            if (r->len > 0 && r->chars[0] == '#') break;
+                            if (r->len >= 2 && r->chars[0] == '-' && r->chars[1] == ' ') {
+                                int flen = (int)strlen(a->filename);
+                                if (r->len == flen + 2 && memcmp(r->chars + 2, a->filename, flen) == 0) {
+                                    buf_delete_row(&E.buf, i);
+                                    int staged_hdr = commit_find_header("# Staged changes");
+                                    if (staged_hdr >= 0) {
+                                        int ins = commit_section_end(staged_hdr) + 1;
+                                        char line[520];
+                                        int llen = snprintf(line, sizeof(line), "+ %s", a->filename);
+                                        buf_insert_row(&E.buf, ins, line, llen);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+            }
+            return;
+        }
+        if (c == 0x12) {  /* Ctrl-R: commit redo */
+            if (commit_undo_pos >= commit_undo_count) {
+                status_msg("Nothing to redo");
+            } else {
+                CommitAction *a = &commit_undo_stack[commit_undo_pos];
+                commit_undo_pos++;
+                if (a->was_stage) {
+                    /* Replay stage. */
+                    if (!git_add(a->filename)) {
+                        status_err("git add failed: %s", a->filename);
+                        commit_undo_pos--;
+                        return;
+                    }
+                    int unstaged_hdr = commit_find_header("# Unstaged changes");
+                    if (unstaged_hdr >= 0) {
+                        for (int i = unstaged_hdr + 1; i < E.buf.numrows; i++) {
+                            Row *r = &E.buf.rows[i];
+                            if (r->len > 0 && r->chars[0] == '#') break;
+                            if (r->len >= 2 && r->chars[0] == '-' && r->chars[1] == ' ') {
+                                int flen = (int)strlen(a->filename);
+                                if (r->len == flen + 2 && memcmp(r->chars + 2, a->filename, flen) == 0) {
+                                    buf_delete_row(&E.buf, i);
+                                    int staged_hdr = commit_find_header("# Staged changes");
+                                    if (staged_hdr >= 0) {
+                                        int ins = commit_section_end(staged_hdr) + 1;
+                                        char line[520];
+                                        int llen = snprintf(line, sizeof(line), "+ %s", a->filename);
+                                        buf_insert_row(&E.buf, ins, line, llen);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    /* Replay unstage. */
+                    if (!git_reset(a->filename)) {
+                        status_err("git reset failed: %s", a->filename);
+                        commit_undo_pos--;
+                        return;
+                    }
+                    int staged_hdr = commit_find_header("# Staged changes");
+                    if (staged_hdr >= 0) {
+                        for (int i = staged_hdr + 1; i < E.buf.numrows; i++) {
+                            Row *r = &E.buf.rows[i];
+                            if (r->len > 0 && r->chars[0] == '#') break;
+                            if (r->len >= 2 && r->chars[0] == '+' && r->chars[1] == ' ') {
+                                int flen = (int)strlen(a->filename);
+                                if (r->len == flen + 2 && memcmp(r->chars + 2, a->filename, flen) == 0) {
+                                    buf_delete_row(&E.buf, i);
+                                    int unstaged_hdr = commit_find_header("# Unstaged changes");
+                                    if (unstaged_hdr >= 0) {
+                                        int ins = commit_section_end(unstaged_hdr) + 1;
+                                        char line[520];
+                                        int llen = snprintf(line, sizeof(line), "- %s", a->filename);
+                                        buf_insert_row(&E.buf, ins, line, llen);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
+            }
+            return;
+        }
+    }
 
     switch (c) {
         /* --- cancel / ESC --- */

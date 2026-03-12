@@ -1,4 +1,5 @@
 build/
+.cache/
 .claude/
 .qe/
 *.kate-swp
