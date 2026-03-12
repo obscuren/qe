@@ -87,8 +87,8 @@ int git_current_branch(char *out, int outlen) {
 
 /* Parse a hunk header line: "@@ -old_start[,old_count] +new_start[,new_count] @@"
    Returns 1 on success. */
-static int parse_hunk(const char *line, int *old_start, int *old_count,
-                      int *new_start, int *new_count) {
+int parse_hunk(const char *line, int *old_start, int *old_count,
+               int *new_start, int *new_count) {
     /* Expect "@@ -" */
     const char *p = line;
     if (p[0] != '@' || p[1] != '@' || p[2] != ' ' || p[3] != '-') return 0;
@@ -712,6 +712,34 @@ GitLogEntry *git_log(int limit, int *out_count) {
     if (count == 0) { free(entries); return NULL; }
     *out_count = count;
     return entries;
+}
+
+char **git_diff_unified_buf(const char *filename, const GitLines *lines,
+                            int *out_count) {
+    *out_count = 0;
+    if (!filename || lines->count <= 0) return NULL;
+
+    /* Write buffer content and HEAD content to temp files. */
+    char tmp_new[64] = "/tmp/qe_unew_XXXXXX";
+    char tmp_old[64];
+    if (write_buf_to_tmp(tmp_new, lines->chars, lines->lens, lines->count,
+                         tmp_new, sizeof(tmp_new)) < 0)
+        return NULL;
+    if (write_head_to_tmp(filename, tmp_old, sizeof(tmp_old)) < 0) {
+        unlink(tmp_new);
+        return NULL;
+    }
+
+    char q_old[256], q_new[256];
+    shell_quote(tmp_old, q_old, sizeof(q_old));
+    shell_quote(tmp_new, q_new, sizeof(q_new));
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "diff -u -- %s %s 2>/dev/null", q_old, q_new);
+
+    char **result = popen_read_lines(cmd, out_count);
+    unlink(tmp_old);
+    unlink(tmp_new);
+    return result;
 }
 
 char **git_show_commit(const char *hash, int *out_count) {

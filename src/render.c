@@ -62,6 +62,24 @@ static char mark_char_at(int buf_idx, int row) {
    When git signs exist, prepends 1 extra column. */
 static int gutter_width_for(const Buffer *buf, int buf_idx) {
     if (!E.opts.line_numbers || buf->numrows == 0) return 0;
+
+    /* BT_DIFF: two number columns from diff_line_numbers. */
+    BufTab *bt = &E.buftabs[buf_idx];
+    if (bt->kind == BT_DIFF && bt->diff_line_numbers) {
+        int max_old = 0, max_new = 0;
+        for (int i = 0; i < bt->diff_line_count; i++) {
+            int o = bt->diff_line_numbers[i * 2];
+            int n = bt->diff_line_numbers[i * 2 + 1];
+            if (o > max_old) max_old = o;
+            if (n > max_new) max_new = n;
+        }
+        int od = 1, nd = 1;
+        { int v = max_old; while (v >= 10) { od++; v /= 10; } }
+        { int v = max_new; while (v >= 10) { nd++; v /= 10; } }
+        /* old_digits + space + new_digits + space + git_sign(1) */
+        return od + 1 + nd + 1 + 1;
+    }
+
     int n = buf->numrows, w = 0;
     while (n > 0) { w++; n /= 10; }
     w++;  /* trailing space */
@@ -455,16 +473,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
     int content_cols = p->width - gw;
 
     /* Determine if this pane should show diff background highlighting.
-       True for the diff pane itself, and for the source pane of an active diff. */
+       True for the diff pane itself and for git-show commit views. */
     int show_diff_bg = is_diff || is_show;
-    if (!show_diff_bg) {
-        for (int di = 0; di < E.num_panes; di++) {
-            BufTab *dbt = &E.buftabs[E.panes[di].buf_idx];
-            if (dbt->kind == BT_DIFF && dbt->diff_source_buf == p->buf_idx) {
-                show_diff_bg = 1; break;
-            }
-        }
-    }
 
     /* Cascade hl_open_comment for dirty rows. */
     if (syn && buf->hl_dirty_from < buf->numrows) {
@@ -760,7 +770,72 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             ab_append(ab, "~", 1);
         } else {
             /* Gutter */
-            if (gw > 0) {
+            if (gw > 0 && is_diff && E.buftabs[p->buf_idx].diff_line_numbers
+                && filerow < E.buftabs[p->buf_idx].diff_line_count) {
+                /* Two-column line numbers for unified diff. */
+                BufTab *dbt = &E.buftabs[p->buf_idx];
+                int oln = dbt->diff_line_numbers[filerow * 2];
+                int nln = dbt->diff_line_numbers[filerow * 2 + 1];
+
+                /* Compute column widths from gutter: gw = od+1+nd+1+1 */
+                int max_old = 0, max_new = 0;
+                for (int di = 0; di < dbt->diff_line_count; di++) {
+                    int o = dbt->diff_line_numbers[di * 2];
+                    int n = dbt->diff_line_numbers[di * 2 + 1];
+                    if (o > max_old) max_old = o;
+                    if (n > max_new) max_new = n;
+                }
+                int od = 1, nd = 1;
+                { int v = max_old; while (v >= 10) { od++; v /= 10; } }
+                { int v = max_new; while (v >= 10) { nd++; v /= 10; } }
+
+                /* Git sign column. */
+                char gs = (filerow < buf->git_signs_count)
+                          ? buf->git_signs[filerow] : ' ';
+                if (gs == '+')      ab_append(ab, "\x1b[32m+", 6);
+                else if (gs == '-') ab_append(ab, "\x1b[31m-", 6);
+                else if (gs == '~') ab_append(ab, "\x1b[33m~", 6);
+                else                ab_append(ab, " ", 1);
+                ab_append(ab, SGR_RESET, 3);
+                if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
+
+                /* Old line number column. */
+                char num[16];
+                if (oln > 0) {
+                    if (row_dbg == GIT_SIGN_DEL)
+                        ab_append(ab, "\x1b[38;5;167m", 12);
+                    else
+                        ab_append(ab, "\x1b[2m", 4);
+                    int nl = snprintf(num, sizeof(num), "%d", oln);
+                    int pad = od - nl;
+                    while (pad-- > 0) ab_append(ab, " ", 1);
+                    ab_append(ab, num, nl);
+                } else {
+                    ab_append(ab, "\x1b[2m", 4);
+                    for (int s = 0; s < od; s++) ab_append(ab, " ", 1);
+                }
+                ab_append(ab, " ", 1);
+                ab_append(ab, SGR_RESET, 3);
+                if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
+
+                /* New line number column. */
+                if (nln > 0) {
+                    if (row_dbg == GIT_SIGN_ADD)
+                        ab_append(ab, "\x1b[38;5;77m", 11);
+                    else
+                        ab_append(ab, "\x1b[2m", 4);
+                    int nl = snprintf(num, sizeof(num), "%d", nln);
+                    int pad = nd - nl;
+                    while (pad-- > 0) ab_append(ab, " ", 1);
+                    ab_append(ab, num, nl);
+                } else {
+                    ab_append(ab, "\x1b[2m", 4);
+                    for (int s = 0; s < nd; s++) ab_append(ab, " ", 1);
+                }
+                ab_append(ab, " ", 1);
+                ab_append(ab, SGR_RESET, 3);
+                if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
+            } else if (gw > 0) {
                 int has_git = (buf->git_signs != NULL);
                 char num[16];
                 int display_num = (E.opts.relative_line_numbers && filerow != pcy)
@@ -973,7 +1048,7 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     if (E.buftabs[p->buf_idx].kind == BT_DIFF) {
         const char *fname = buf->filename ? buf->filename : "[No Name]";
         char left[128], right[16];
-        int llen = snprintf(left, sizeof(left), " [HEAD] %.30s", fname);
+        int llen = snprintf(left, sizeof(left), " [Diff] %.30s", fname);
         int rlen = snprintf(right, sizeof(right), "%d", pcy + 1);
         status_bar_simple(ab, p, is_active, left, llen, right, rlen);
         return;

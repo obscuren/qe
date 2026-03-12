@@ -57,6 +57,8 @@ typedef struct {
     QfList    *qf;
     int        blame_source_buf;
     int        diff_source_buf;
+    int       *diff_line_numbers;  /* [old_lineno, new_lineno] pairs per row */
+    int        diff_line_count;    /* number of rows (array length = count*2) */
     GitLogEntry *log_entries;
     int         log_count;
     TermState *term;

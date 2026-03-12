@@ -71,6 +71,11 @@ int git_commit(const char *message, char *output, int outlen);
 /* Return a malloc'd string with `git diff --cached --stat` output, or NULL. */
 char *git_staged_summary(void);
 
+/* Parse a hunk header line: "@@ -old_start[,old_count] +new_start[,new_count] @@"
+   Returns 1 on success. */
+int parse_hunk(const char *line, int *old_start, int *old_count,
+               int *new_start, int *new_count);
+
 /* A single diff hunk (line ranges are 1-based). */
 typedef struct {
     int old_start, old_count;  /* range in old (HEAD) file */
@@ -100,6 +105,12 @@ typedef struct {
    Returns malloc'd array; caller must free().
    limit = max entries (0 = default 200). */
 GitLogEntry *git_log(int limit, int *out_count);
+
+/* Produce unified diff output of buffer vs HEAD.
+   Returns malloc'd array of strdup'd lines; caller frees each + array.
+   Sets *out_count. */
+char **git_diff_unified_buf(const char *filename, const GitLines *lines,
+                            int *out_count);
 
 /* Get full `git show <hash>` output as an array of lines.
    Returns malloc'd array of strdup'd strings; caller frees each + array.

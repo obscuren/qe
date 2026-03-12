@@ -2491,22 +2491,9 @@ static void diff_close(void) {
     int dpi = find_pane_by_kind(BT_DIFF);
     if (dpi < 0) return;
 
-    Pane *dp = &E.panes[dpi];
-    int buf_idx = dp->buf_idx;
-    int diff_left  = dp->left;
-    int diff_width = dp->width;
-
-    /* Find the source pane to the right and expand it. */
-    int cpane = -1;
-    for (int i = 0; i < E.num_panes; i++) {
-        if (i != dpi && E.panes[i].left == diff_left + diff_width + 1) {
-            cpane = i; break;
-        }
-    }
-    if (cpane >= 0) {
-        E.panes[cpane].left   = diff_left;
-        E.panes[cpane].width += diff_width + 1;
-    }
+    int buf_idx = E.panes[dpi].buf_idx;
+    BufTab *dbt = &E.buftabs[buf_idx];
+    int src_buf = dbt->diff_source_buf;
 
     /* Free diff buffer. */
     if (E.cur_pane == dpi) {
@@ -2515,17 +2502,15 @@ static void diff_close(void) {
         memset(&E.buf, 0, sizeof(Buffer));
         E.buf.hl_dirty_from = INT_MAX;
     } else {
-        buf_free(&E.buftabs[buf_idx].buf);
+        buf_free(&dbt->buf);
     }
+    free(dbt->diff_line_numbers);
     buftab_reset(&E.buftabs[buf_idx]);
 
-    /* Remove diff pane. */
-    for (int i = dpi; i < E.num_panes - 1; i++) E.panes[i] = E.panes[i + 1];
-    E.num_panes--;
-    if (cpane > dpi) cpane--;
-
-    /* Activate the source pane. */
-    if (cpane >= 0) pane_restore_focus(cpane);
+    /* Switch back to source buffer (no pane removal needed). */
+    E.panes[E.cur_pane].buf_idx = src_buf;
+    E.cur_buftab = src_buf;
+    editor_buf_restore(src_buf);
     E.mode = MODE_NORMAL;
     E.match_bracket_valid = 0;
 }
@@ -2535,23 +2520,15 @@ static void diff_open(void) {
     if (find_pane_by_kind(BT_DIFF) >= 0) { diff_close(); return; }
 
     if (!E.buf.filename) { status_err("No filename"); return; }
-    if (E.num_panes >= MAX_PANES) { status_err("Too many panes"); return; }
     if (E.num_buftabs >= MAX_BUFS) { status_err("Too many buffers"); return; }
 
-    /* Get HEAD version. */
-    int head_count = 0;
-    char **head_lines = git_show_head(E.buf.filename, &head_count);
-    if (!head_lines || head_count == 0) {
-        status_err("git show HEAD failed (file committed?)");
-        return;
-    }
-
-    /* Need room for two panes. */
-    Pane *sp = &E.panes[E.cur_pane];
-    if (sp->width < 30) {
-        for (int i = 0; i < head_count; i++) free(head_lines[i]);
-        free(head_lines);
-        status_err("Pane too narrow for diff");
+    /* Get unified diff of buffer vs HEAD. */
+    GitLines gl = git_lines_from_buf(&E.buf);
+    int raw_count = 0;
+    char **raw_lines = git_diff_unified_buf(E.buf.filename, &gl, &raw_count);
+    git_lines_free(&gl);
+    if (!raw_lines || raw_count == 0) {
+        status_err("No differences (or file not in git)");
         return;
     }
 
@@ -2563,73 +2540,88 @@ static void diff_open(void) {
     E.buftabs[didx].syntax = syntax_detect(E.buf.filename);
     buf_init(&E.buftabs[didx].buf);
 
-    /* Populate diff buffer rows. */
-    for (int i = 0; i < head_count; i++) {
-        int len = (int)strlen(head_lines[i]);
-        buf_insert_row(&E.buftabs[didx].buf, i, head_lines[i], len);
-        free(head_lines[i]);
+    /* Filter: keep only hunk headers (@@ ...) and content lines (+/-/context).
+       Skip file headers (diff --git, index, ---, +++). */
+    int row = 0;
+    int in_hunk = 0;
+    /* Temporary storage for line numbers: two ints per kept row. */
+    int ln_cap = raw_count * 2;
+    int *ln_nums = malloc(sizeof(int) * ln_cap);
+    int old_num = 0, new_num = 0;
+
+    for (int i = 0; i < raw_count; i++) {
+        const char *ln = raw_lines[i];
+        int len = (int)strlen(ln);
+
+        if (len >= 2 && ln[0] == '@' && ln[1] == '@') {
+            /* Hunk header — parse start positions. */
+            int os, oc, ns, nc;
+            if (parse_hunk(ln, &os, &oc, &ns, &nc)) {
+                old_num = os;
+                new_num = ns;
+            }
+            in_hunk = 1;
+            buf_insert_row(&E.buftabs[didx].buf, row, ln, len);
+            ln_nums[row * 2]     = 0;  /* no line number for hunk header */
+            ln_nums[row * 2 + 1] = 0;
+            row++;
+        } else if (in_hunk) {
+            if (len > 0 && ln[0] == '-') {
+                buf_insert_row(&E.buftabs[didx].buf, row, ln + 1, len - 1);
+                ln_nums[row * 2]     = old_num++;
+                ln_nums[row * 2 + 1] = 0;
+                row++;
+            } else if (len > 0 && ln[0] == '+') {
+                buf_insert_row(&E.buftabs[didx].buf, row, ln + 1, len - 1);
+                ln_nums[row * 2]     = 0;
+                ln_nums[row * 2 + 1] = new_num++;
+                row++;
+            } else if (len > 0 && ln[0] == ' ') {
+                buf_insert_row(&E.buftabs[didx].buf, row, ln + 1, len - 1);
+                ln_nums[row * 2]     = old_num++;
+                ln_nums[row * 2 + 1] = new_num++;
+                row++;
+            }
+            /* Skip anything else (\ No newline at end of file, etc.) */
+        }
+        free(raw_lines[i]);
     }
-    free(head_lines);
+    free(raw_lines);
+
     E.buftabs[didx].buf.dirty = 0;
-    /* Copy filename so gutter git signs and syntax work. */
     E.buftabs[didx].buf.filename = strdup(E.buf.filename);
+    E.buftabs[didx].diff_line_numbers = ln_nums;
+    E.buftabs[didx].diff_line_count = row;
 
-    /* Compute diff signs for both sides (background highlighting). */
-    {
-        Buffer *hbuf = &E.buftabs[didx].buf;
-        GitLines new_gl = git_lines_from_buf(&E.buf);
-        GitLines old_gl = git_lines_from_buf(hbuf);
-        char *ns = NULL, *os = NULL;
-        git_diff_signs_both(E.buf.filename, &new_gl, &old_gl, &ns, &os);
-        git_lines_free(&new_gl);
-        git_lines_free(&old_gl);
-        free(E.buf.git_signs);
-        E.buf.git_signs = ns;
-        E.buf.git_signs_count = ns ? E.buf.numrows : 0;
-        free(hbuf->git_signs);
-        hbuf->git_signs = os;
-        hbuf->git_signs_count = os ? hbuf->numrows : 0;
+    /* Build git_signs from the original diff prefixes. */
+    Buffer *cb = &E.buftabs[didx].buf;
+    cb->git_signs = calloc(row, 1);
+    cb->git_signs_count = row;
+    for (int i = 0; i < row; i++) {
+        int oln = ln_nums[i * 2];
+        int nln = ln_nums[i * 2 + 1];
+        if (oln == 0 && nln == 0) {
+            /* Hunk header */
+            cb->git_signs[i] = GIT_SIGN_MOD;
+        } else if (oln > 0 && nln == 0) {
+            cb->git_signs[i] = GIT_SIGN_DEL;
+        } else if (oln == 0 && nln > 0) {
+            cb->git_signs[i] = GIT_SIGN_ADD;
+        } else {
+            cb->git_signs[i] = GIT_SIGN_NONE;
+        }
     }
 
-    /* Split: left = HEAD (diff), right = working copy. */
-    int src_idx = E.cur_pane;
+    /* Switch current pane to the diff buffer. */
     pane_save_cursor();
     editor_buf_save(E.cur_buftab);
-
-    sp = &E.panes[src_idx];
-    int old_left  = sp->left;
-    int old_width = sp->width;
-    int half = old_width / 2;
-
-    sp->left  = old_left + half + 1;
-    sp->width = old_width - half - 1;
-
-    /* Insert diff pane before the source pane. */
-    for (int i = E.num_panes; i > src_idx; i--) E.panes[i] = E.panes[i - 1];
-    E.num_panes++;
-    src_idx++;  /* source pane shifted right */
-
-    Pane *dp = &E.panes[src_idx - 1];
-    dp->top     = E.panes[src_idx].top;
-    dp->left    = old_left;
-    dp->height  = E.panes[src_idx].height;
-    dp->width   = half;
-    dp->buf_idx = didx;
-    dp->cx      = 0;
-    dp->cy      = E.cy;
-    dp->rowoff  = E.rowoff;
-    dp->coloff  = 0;
-
-    /* Keep focus on source (working copy) pane. */
-    E.cur_pane   = src_idx;
-    E.screenrows = E.panes[src_idx].height;
-    E.screencols = E.panes[src_idx].width;
-    E.cur_buftab = E.panes[src_idx].buf_idx;
-    editor_buf_restore(E.cur_buftab);
+    E.panes[E.cur_pane].buf_idx = didx;
+    E.cur_buftab = didx;
+    editor_buf_restore(didx);
     E.mode = MODE_NORMAL;
+    E.cy = 0; E.cx = 0;
+    E.rowoff = 0; E.coloff = 0;
     E.match_bracket_valid = 0;
-
-    if (E.last_content_pane >= src_idx - 1) E.last_content_pane++;
 }
 
 /* ── Hunk operations ─────────────────────────────────────────────────── */
@@ -4987,15 +4979,6 @@ static void editor_process_normal(int c) {
             E.cy = E.buf.numrows - 1;
         } else if (c == 'g') {
             E.cy = 0; E.rowoff = 0;
-        }
-        /* Sync scroll to source pane. */
-        int src_buf = E.buftabs[E.cur_buftab].diff_source_buf;
-        for (int i = 0; i < E.num_panes; i++) {
-            if (E.panes[i].buf_idx == src_buf) {
-                E.panes[i].cy     = E.cy;
-                E.panes[i].rowoff = E.rowoff;
-                break;
-            }
         }
         return;
     }
