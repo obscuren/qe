@@ -157,6 +157,18 @@
             <p>Use <code>qe</code> as a command-line tool: <code>qe cat</code>, <code>qe diff</code>, <code>qe blame</code>, <code>qe log</code>, <code>qe grep</code> — all with syntax-colored output. Add custom subcommands via Lua.</p>
         </div>
 
+        <div class="feature-card">
+            <div class="feature-icon">&#9740;</div>
+            <h3>Undo Tree</h3>
+            <p>Full branching undo history — never lose a change. Browse the tree visually with <code>:revisions</code>. Time-travel with <code>g-</code>/<code>g+</code> to reach states that linear undo/redo can't.</p>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">&#9736;</div>
+            <h3>Session &amp; State</h3>
+            <p>Save and restore sessions with <code>:mksession</code> and <code>:source</code>. Jump list (<code>Ctrl-O</code>/<code>Ctrl-I</code>) and marks (<code>ma</code>, <code>'a</code>) persist across the editing session. Pick up where you left off.</p>
+        </div>
+
     </div>
 </section>
 
@@ -167,6 +179,11 @@
     <div class="install-steps">
         <h3>Requirements</h3>
         <p>CMake 3.16+, a C11 compiler, Lua 5.4 development headers.</p>
+
+        <div class="install-pkg">
+            <h4>macOS (Homebrew)</h4>
+            <pre><code>brew install lua cmake</code></pre>
+        </div>
 
         <div class="install-pkg">
             <h4>Fedora / RHEL</h4>
