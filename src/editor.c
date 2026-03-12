@@ -5,6 +5,7 @@
 #include "lang.h"
 #include "terminal.h"
 #include "term_emu.h"
+#include "lua_bridge.h"
 #include "recovery.h"
 #include "undofile.h"
 #include "utils.h"
@@ -246,6 +247,7 @@ void editor_open_file_arg(const char *file_arg) {
     } else {
         buf_open(&E.buf, file_arg);
         editor_detect_syntax();
+        lua_bridge_fire_event("BufOpen", E.buf.filename, NULL);
         UndoTree loaded = {0};
         if (undofile_load(file_arg, &loaded) == 0)
             E.undo_tree = loaded;

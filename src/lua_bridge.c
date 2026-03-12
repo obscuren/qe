@@ -17,6 +17,25 @@
 
 static lua_State *L;
 
+/* ── Event hooks ─────────────────────────────────────────────────────── */
+
+#define MAX_HOOKS_PER_EVENT 32
+
+typedef enum {
+    EVENT_BUF_OPEN,
+    EVENT_BUF_SAVE,
+    EVENT_BUF_CLOSE,
+    EVENT_MODE_CHANGE,
+    EVENT_COUNT
+} EventType;
+
+static const char *event_names[EVENT_COUNT] = {
+    "BufOpen", "BufSave", "BufClose", "ModeChange"
+};
+
+static int hook_refs[EVENT_COUNT][MAX_HOOKS_PER_EVENT];
+static int hook_counts[EVENT_COUNT];
+
 /* ── Key bindings ────────────────────────────────────────────────────── */
 
 #define MAX_BINDINGS 256
@@ -649,6 +668,27 @@ static int l_git_blame(lua_State *LS) {
     return 1;
 }
 
+/* ── Tier 4: Event hooks ─────────────────────────────────────────────── */
+
+static int l_on(lua_State *LS) {
+    const char *name = luaL_checkstring(LS, 1);
+    luaL_checktype(LS, 2, LUA_TFUNCTION);
+
+    int ev = -1;
+    for (int i = 0; i < EVENT_COUNT; i++) {
+        if (strcmp(name, event_names[i]) == 0) { ev = i; break; }
+    }
+    if (ev < 0)
+        return luaL_error(LS, "unknown event: %s", name);
+    if (hook_counts[ev] >= MAX_HOOKS_PER_EVENT)
+        return luaL_error(LS, "too many hooks for %s (max %d)",
+                          name, MAX_HOOKS_PER_EVENT);
+
+    lua_pushvalue(LS, 2);
+    hook_refs[ev][hook_counts[ev]++] = luaL_ref(LS, LUA_REGISTRYINDEX);
+    return 0;
+}
+
 static const luaL_Reg qe_lib[] = {
     {"set_option",   l_set_option},
     {"print",        l_print},
@@ -681,6 +721,8 @@ static const luaL_Reg qe_lib[] = {
     {"git_diff_signs", l_git_diff_signs},
     {"git_log",        l_git_log},
     {"git_blame",      l_git_blame},
+    /* Tier 4: Event hooks */
+    {"on",             l_on},
     {NULL,           NULL}
 };
 
@@ -784,4 +826,42 @@ int lua_bridge_cli(const char *name, int argc, char **argv) {
     int ret = lua_isinteger(L, -1) ? (int)lua_tointeger(L, -1) : 0;
     lua_pop(L, 1);
     return ret;
+}
+
+const char *editor_mode_str(EditorMode m) {
+    switch (m) {
+    case MODE_NORMAL:       return "normal";
+    case MODE_INSERT:       return "insert";
+    case MODE_COMMAND:      return "command";
+    case MODE_SEARCH:       return "search";
+    case MODE_VISUAL:       return "visual";
+    case MODE_VISUAL_LINE:  return "visual_line";
+    case MODE_VISUAL_BLOCK: return "visual_block";
+    case MODE_FUZZY:        return "fuzzy";
+    default:                return "unknown";
+    }
+}
+
+void lua_bridge_fire_event(const char *event, const char *arg1,
+                           const char *arg2) {
+    if (!L) return;
+
+    int ev = -1;
+    for (int i = 0; i < EVENT_COUNT; i++) {
+        if (strcmp(event, event_names[i]) == 0) { ev = i; break; }
+    }
+    if (ev < 0 || hook_counts[ev] == 0) return;
+
+    for (int i = 0; i < hook_counts[ev]; i++) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, hook_refs[ev][i]);
+        int nargs = 0;
+        if (arg1) { lua_pushstring(L, arg1); nargs++; }
+        if (arg2) { lua_pushstring(L, arg2); nargs++; }
+        if (lua_pcall(L, nargs, 0, 0) != LUA_OK) {
+            snprintf(E.statusmsg, sizeof(E.statusmsg),
+                     "lua [%s]: %s", event, lua_tostring(L, -1));
+            E.statusmsg_is_error = 1;
+            lua_pop(L, 1);
+        }
+    }
 }
