@@ -447,7 +447,7 @@ static void reg_copy(int dst, int src) {
 }
 
 /* Copy register contents to system clipboard via available tool. */
-static void clipboard_copy(int ri) {
+void clipboard_copy(int ri) {
     if (!E.regs[ri].rows || E.regs[ri].numrows == 0) return;
     /* Try wl-copy (Wayland), then xclip, then xsel. */
     const char *cmds[] = {
@@ -469,7 +469,7 @@ static void clipboard_copy(int ri) {
 }
 
 /* Fetch system clipboard into a register. */
-static void clipboard_paste(int ri) {
+void clipboard_paste(int ri) {
     const char *cmds[] = {
         "wl-paste -n 2>/dev/null",
         "xclip -selection clipboard -o 2>/dev/null",
@@ -3760,7 +3760,7 @@ static void completion_free(void);   /* forward declaration — defined below */
 /* Clear transient editing state and switch the live slot to idx. */
 static void jump_push(void);  /* forward declaration — defined after switch_to_buf */
 
-static void switch_to_buf(int idx) {
+void switch_to_buf(int idx) {
     jump_push();
     editor_buf_save(E.cur_buftab);
     la_free();
