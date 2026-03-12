@@ -196,9 +196,11 @@ static const BuiltinCmd builtins[] = {
     {NULL, NULL}
 };
 
-int cli_dispatch(int argc, char **argv, int *out_line, int *out_readonly) {
+int cli_dispatch(int argc, char **argv, int *out_line, int *out_readonly,
+                 const char **out_session) {
     *out_line = 0;
     *out_readonly = 0;
+    *out_session = NULL;
 
     /* Parse flags that don't prevent editor startup. */
     for (int i = 1; i < argc; i++) {
@@ -206,6 +208,8 @@ int cli_dispatch(int argc, char **argv, int *out_line, int *out_readonly) {
             *out_line = atoi(argv[i] + 1);
         } else if (strcmp(argv[i], "-R") == 0) {
             *out_readonly = 1;
+        } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
+            *out_session = argv[++i];
         }
     }
 
@@ -230,6 +234,7 @@ int cli_dispatch(int argc, char **argv, int *out_line, int *out_readonly) {
                    "    -v, --version                       Display Qe version number\n"
                    "    +N                                  Open file at line N\n"
                    "    -R                                  Read-only mode\n"
+                   "    -s <file>                           Restore session from file\n"
                    "\n"
                    "Commands:\n"
                    "    cat <file>                          Syntax-highlighted file output\n"
