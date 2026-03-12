@@ -133,7 +133,7 @@
         <div class="feature-card fade-up">
             <div class="feature-icon">git</div>
             <h3>Git Integration</h3>
-            <p>Gutter diff signs, hunk navigation (<code>]c</code>/<code>[c</code>), hunk stage/revert. Blame, diff, log, and commit views. Stage files, stash changes, and create commits without leaving the editor.</p>
+            <p>Gutter diff signs, hunk navigation (<code>]c</code>/<code>[c</code>), hunk stage/revert. Blame, diff, log, and commit views. Interactive <code>:Gcommit</code> — stage/unstage files with <code>+</code>/<code>-</code>, commit with <code>:wq</code>.</p>
         </div>
 
         <div class="feature-card fade-up">
@@ -163,13 +163,13 @@
         <div class="feature-card fade-up">
             <div class="feature-icon">&#9740;</div>
             <h3>Undo Tree</h3>
-            <p>Full branching undo history — never lose a change. Browse the tree visually with <code>:revisions</code>. Time-travel with <code>g-</code>/<code>g+</code> to reach states that linear undo/redo can't.</p>
+            <p>Full branching undo history — never lose a change. Browse the tree visually with <code>:revisions</code>. Time-travel with <code>g-</code>/<code>g+</code> to reach states that linear undo/redo can't. History persists to disk and survives restarts.</p>
         </div>
 
         <div class="feature-card fade-up">
             <div class="feature-icon">&#9736;</div>
             <h3>Session &amp; State</h3>
-            <p>Save and restore sessions with <code>:mksession</code> and <code>:source</code>. Jump list (<code>Ctrl-O</code>/<code>Ctrl-I</code>) and marks (<code>ma</code>, <code>'a</code>) persist across the editing session. Pick up where you left off.</p>
+            <p>Save and restore sessions with <code>:mksession</code> / <code>:source</code> or <code>qe -s file</code>. Crash recovery auto-saves unsaved buffers — on reopen, choose to recover, ignore, or delete. Pick up where you left off.</p>
         </div>
 
     </div>
