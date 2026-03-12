@@ -671,16 +671,62 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
             continue;
         }
 
-        /* Commit buffer: dim comment lines starting with #. */
+        /* Commit buffer: dim comment lines, color file markers, visual selection. */
         if (is_commit && filerow < buf->numrows) {
             Row *row = &buf->rows[filerow];
             int avail = p->width;
             int rlen = row->len < avail ? row->len : avail;
-            if (rlen > 0 && row->chars[0] == '#')
-                ab_append(ab, "\x1b[2m", 4);  /* dim */
-            ab_append(ab, row->chars, rlen);
-            if (rlen > 0 && row->chars[0] == '#')
+
+            /* Compute visual selection range for this row. */
+            int vis_c0 = -1, vis_c1 = -1;
+            visual_col_range_for(filerow, vis_ar, vis_ac,
+                                 pcy, pcx, mode, &vis_c0, &vis_c1);
+
+            if (vis_c0 >= 0) {
+                /* Visual selection active on this row. */
+                int vc1 = (vis_c1 == INT_MAX || vis_c1 > rlen) ? rlen : vis_c1;
+                if (vis_c0 > rlen) vis_c0 = rlen;
+                /* Pre-selection text. */
+                if (vis_c0 > 0) {
+                    if (rlen > 0 && row->chars[0] == '#')
+                        ab_append(ab, "\x1b[2m", 4);
+                    ab_append(ab, row->chars, vis_c0);
+                    if (rlen > 0 && row->chars[0] == '#')
+                        ab_append(ab, SGR_RESET, 3);
+                }
+                /* Selected text. */
+                ab_append(ab, "\x1b[44m", 5);
+                if (vc1 > vis_c0)
+                    ab_append(ab, row->chars + vis_c0, vc1 - vis_c0);
+                /* Pad selection to fill empty space if line is short. */
+                if (vis_c1 == INT_MAX) {
+                    int pad = avail - vc1;
+                    for (int s = 0; s < pad; s++)
+                        ab_append(ab, " ", 1);
+                }
                 ab_append(ab, SGR_RESET, 3);
+                /* Post-selection text. */
+                if (vc1 < rlen) {
+                    if (rlen > 0 && row->chars[0] == '#')
+                        ab_append(ab, "\x1b[2m", 4);
+                    ab_append(ab, row->chars + vc1, rlen - vc1);
+                    if (rlen > 0 && row->chars[0] == '#')
+                        ab_append(ab, SGR_RESET, 3);
+                }
+            } else {
+                /* No visual selection — standard rendering. */
+                if (rlen > 0 && row->chars[0] == '#')
+                    ab_append(ab, "\x1b[2m", 4);  /* dim */
+                else if (rlen >= 2 && row->chars[0] == '+' && row->chars[1] == ' ')
+                    ab_append(ab, "\x1b[32m", 5);  /* green */
+                else if (rlen >= 2 && row->chars[0] == '-' && row->chars[1] == ' ')
+                    ab_append(ab, "\x1b[31m", 5);  /* red */
+                ab_append(ab, row->chars, rlen);
+                if (rlen > 0 && (row->chars[0] == '#' ||
+                    (rlen >= 2 && (row->chars[0] == '+' || row->chars[0] == '-')
+                     && row->chars[1] == ' ')))
+                    ab_append(ab, SGR_RESET, 3);
+            }
             fr++;
             continue;
         }
