@@ -25,5 +25,6 @@ void editor_open_tree(void);    /* open (or toggle) the file-tree sidebar */
 void editor_open_fuzzy(void);   /* open the fuzzy file finder overlay     */
 void editor_reap_terminals(void); /* close terminal panes whose shell exited */
 void editor_load_session(const char *path); /* restore a saved session file */
+void diff_open(void);   /* open the diff view for the current buffer */
 
 #endif

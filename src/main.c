@@ -7,6 +7,7 @@
 #include "cli.h"
 
 #include <signal.h>
+#include <string.h>
 
 static volatile int g_resized = 0;
 static void handle_sigwinch(int s) { (void)s; g_resized = 1; }
@@ -29,10 +30,12 @@ int main(int argc, char *argv[]) {
     filewatcher_init();
     E.readonly = readonly;
 
+    int is_diff = (argc >= 3 && strcmp(argv[1], "diff") == 0);
+
     if (session_file) {
         editor_load_session(session_file);
     } else {
-        const char *file_arg = editor_find_file_arg(argc, argv);
+        const char *file_arg = is_diff ? argv[2] : editor_find_file_arg(argc, argv);
         if (file_arg) {
             editor_open_file_arg(file_arg);
             filewatcher_add(E.cur_buftab);
@@ -43,6 +46,8 @@ int main(int argc, char *argv[]) {
             if (E.cy >= E.buf.numrows) E.cy = E.buf.numrows - 1;
         }
     }
+
+    if (is_diff) diff_open();
 
     while (1) {
         if (g_resized) { g_resized = 0; editor_handle_resize(); }
