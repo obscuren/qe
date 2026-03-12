@@ -3741,11 +3741,13 @@ static void rev_handle_key(int c) {
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
-    /* Remove recovery files for clean (non-dirty) buffers. Dirty buffers
-       (force-quit via :q!) intentionally keep their recovery files. */
+    /* Fire BufClose for each non-special buffer and remove recovery files
+       for clean (non-dirty) buffers.  Dirty buffers (force-quit via :q!)
+       intentionally keep their recovery files. */
     for (int i = 0; i < E.num_buftabs; i++) {
         if (buftab_is_special(&E.buftabs[i])) continue;
         Buffer *b = (i == E.cur_buftab) ? &E.buf : &E.buftabs[i].buf;
+        lua_bridge_fire_event("BufClose", b->filename, NULL);
         if (b->filename && !b->dirty)
             recovery_remove(b->filename);
     }
@@ -3895,6 +3897,7 @@ static int open_new_buf(const char *filename) {
         editor_detect_syntax();
         editor_update_git_signs();
         filewatcher_add(E.cur_buftab);
+        lua_bridge_fire_event("BufOpen", E.buf.filename, NULL);
         if (recovery_exists(filename)) {
             E.recovery_prompt_buf = E.cur_buftab;
             const char *base = strrchr(filename, '/');
@@ -3928,6 +3931,8 @@ static void term_close_buf(int bi) {
         if (pane_idx != E.cur_pane)
             pane_activate(pane_idx);
         int closing_buf = E.cur_buftab;
+        lua_bridge_fire_event("BufClose",
+                              E.buftabs[closing_buf].buf.filename, NULL);
         pane_close(E.cur_pane);
         /* Remove the terminal buffer slot. */
         buf_free(&E.buftabs[closing_buf].buf);
@@ -4316,6 +4321,7 @@ void editor_execute_command(void) {
                             status_err("Cannot write \"%s\"", E.buf.filename);
                             errs++;
                         } else {
+                            lua_bridge_fire_event("BufSave", E.buf.filename, NULL);
                             undofile_save(E.buf.filename, &E.undo_tree);
                             recovery_remove(E.buf.filename);
                             E.buftabs[E.cur_buftab].watch_skip++;
@@ -4333,6 +4339,7 @@ void editor_execute_command(void) {
                                 status_err("Cannot write \"%s\"", b->filename);
                                 errs++;
                             } else {
+                                lua_bridge_fire_event("BufSave", b->filename, NULL);
                                 undofile_save(b->filename, &E.buftabs[i].undo_tree);
                                 recovery_remove(b->filename);
                                 E.buftabs[i].watch_skip++;
@@ -4359,6 +4366,7 @@ void editor_execute_command(void) {
                     }
                     if (buf_save(&E.buf) == 0) {
                         editor_update_git_signs();
+                        lua_bridge_fire_event("BufSave", E.buf.filename, NULL);
                         undofile_save(E.buf.filename, &E.undo_tree);
                         recovery_remove(E.buf.filename);
                         E.buftabs[E.cur_buftab].watch_skip++;
@@ -6878,6 +6886,9 @@ void editor_process_keypress(void) {
     if (c == MOUSE_SCROLL_UP)   { handle_mouse_scroll(-1); return; }
     if (c == MOUSE_SCROLL_DOWN) { handle_mouse_scroll(+1); return; }
 
+    /* Save mode before processing for ModeChange hook. */
+    EditorMode mode_before = E.mode;
+
     /* Terminal pane in INSERT mode: forward keys to PTY.
        Ctrl-\ (0x1c) escapes back to normal mode for pane nav / commands. */
     if (E.buftabs[E.panes[E.cur_pane].buf_idx].kind == BT_TERM
@@ -6886,6 +6897,9 @@ void editor_process_keypress(void) {
         if (c == 0x1c || c == '\x1b') {
             /* Ctrl-\ or Escape: return to normal mode (terminal-normal). */
             E.mode = MODE_NORMAL;
+            lua_bridge_fire_event("ModeChange",
+                                  editor_mode_str(mode_before),
+                                  editor_mode_str(E.mode));
             return;
         }
         if (ts && !ts->exited) {
@@ -6935,6 +6949,11 @@ void editor_process_keypress(void) {
         case MODE_VISUAL_BLOCK: editor_process_visual(c);  break;
         case MODE_FUZZY:       editor_process_fuzzy(c);   break;
     }
+
+    if (E.mode != mode_before)
+        lua_bridge_fire_event("ModeChange",
+                              editor_mode_str(mode_before),
+                              editor_mode_str(E.mode));
 
     /* After any non-vertical-move action, record the current column as the
        preferred column so future j/k movements try to restore it. */

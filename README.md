@@ -898,6 +898,43 @@ if log then
 end
 ```
 
+### Event Hooks
+
+| Function | Description |
+|---|---|
+| `qe.on(event, fn)` | Register a callback for an editor event |
+
+| Event | Callback args | Fires when |
+|---|---|---|
+| `"BufOpen"` | `(filename)` | A file is opened |
+| `"BufSave"` | `(filename)` | A buffer is written to disk |
+| `"BufClose"` | `(filename_or_nil)` | A buffer is closed or editor quits |
+| `"ModeChange"` | `(old_mode, new_mode)` | Editor mode transitions |
+
+Multiple callbacks per event are supported. Errors in callbacks are shown in the status bar without crashing.
+
+```lua
+-- Auto-format on save
+qe.on("BufSave", function(filename)
+    if filename:match("%.lua$") then
+        os.execute("stylua " .. filename)
+        qe.command("e " .. filename)  -- reload
+    end
+end)
+
+-- Log mode changes
+qe.on("ModeChange", function(old, new)
+    qe.print(old .. " → " .. new)
+end)
+
+-- Detect filetype on open
+qe.on("BufOpen", function(filename)
+    if filename:match("%.tsx?$") then
+        qe.print("TypeScript file opened")
+    end
+end)
+```
+
 ### `qe.add_syntax(def)`
 
 Register a syntax definition for one or more file types. The highlighting engine is built into the editor; this call supplies the language-specific rules.

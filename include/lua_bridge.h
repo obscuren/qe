@@ -11,5 +11,10 @@ int  lua_bridge_call_key(EditorMode mode, int key);
 void lua_bridge_exec(const char *code);
 /* Run a Lua-registered CLI subcommand.  Returns exit code. */
 int  lua_bridge_cli(const char *name, int argc, char **argv);
+/* Fire all Lua hooks registered for the named event. */
+void lua_bridge_fire_event(const char *event, const char *arg1,
+                           const char *arg2);
+/* Convert an EditorMode enum to its Lua string name. */
+const char *editor_mode_str(EditorMode m);
 
 #endif
