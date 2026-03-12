@@ -5,6 +5,7 @@
 #include "lang.h"
 #include "terminal.h"
 #include "term_emu.h"
+#include "recovery.h"
 #include "undofile.h"
 #include "utils.h"
 
@@ -122,6 +123,7 @@ void editor_init(void) {
     E.pending_leader_g = 0;
     E.file_watch_fd    = -1;
     E.watch_prompt_buf = -1;
+    E.recovery_prompt_buf = -1;
     git_current_branch(E.git_branch, sizeof(E.git_branch));
 
     lang_register_defaults();
@@ -247,6 +249,15 @@ void editor_open_file_arg(const char *file_arg) {
         UndoTree loaded = {0};
         if (undofile_load(file_arg, &loaded) == 0)
             E.undo_tree = loaded;
+        if (recovery_exists(file_arg)) {
+            E.recovery_prompt_buf = E.cur_buftab;
+            const char *base = strrchr(file_arg, '/');
+            base = base ? base + 1 : file_arg;
+            snprintf(E.statusmsg, sizeof(E.statusmsg),
+                     "Recovery file found for \"%s\". [I]gnore, [R]ecover, [D]elete: ",
+                     base);
+            E.statusmsg_is_error = 1;
+        }
     }
 }
 
@@ -295,8 +306,9 @@ int editor_poll_for_input(void) {
                 .fd = E.buftabs[i].term->pty_fd, .events = POLLIN };
     }
 
-    int pr = poll(pfds, nfds, -1);
-    if (pr <= 0) return 0;
+    int pr = poll(pfds, nfds, 2000);
+    if (pr == 0) { recovery_tick(); return 0; }
+    if (pr < 0) return 0;
 
     if (inotify_slot >= 0 && (pfds[inotify_slot].revents & POLLIN))
         filewatcher_drain();

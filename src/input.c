@@ -8,6 +8,7 @@
 #include "search.h"
 #include "term_emu.h"
 #include "tree.h"
+#include "recovery.h"
 #include "undofile.h"
 #include "utils.h"
 
@@ -3493,6 +3494,14 @@ static void rev_handle_key(int c) {
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
+    /* Remove recovery files for clean (non-dirty) buffers. Dirty buffers
+       (force-quit via :q!) intentionally keep their recovery files. */
+    for (int i = 0; i < E.num_buftabs; i++) {
+        if (buftab_is_special(&E.buftabs[i])) continue;
+        Buffer *b = (i == E.cur_buftab) ? &E.buf : &E.buftabs[i].buf;
+        if (b->filename && !b->dirty)
+            recovery_remove(b->filename);
+    }
     write(STDOUT_FILENO, "\x1b[0 q", 5);  /* reset cursor shape */
     exit(EXIT_SUCCESS);
 }
@@ -3639,7 +3648,17 @@ static int open_new_buf(const char *filename) {
         editor_detect_syntax();
         editor_update_git_signs();
         filewatcher_add(E.cur_buftab);
-        status_msg("\"%s\"", E.buf.filename ? E.buf.filename : filename);
+        if (recovery_exists(filename)) {
+            E.recovery_prompt_buf = E.cur_buftab;
+            const char *base = strrchr(filename, '/');
+            base = base ? base + 1 : filename;
+            snprintf(E.statusmsg, sizeof(E.statusmsg),
+                     "Recovery file found for \"%s\". [I]gnore, [R]ecover, [D]elete: ",
+                     base);
+            E.statusmsg_is_error = 1;
+        } else {
+            status_msg("\"%s\"", E.buf.filename ? E.buf.filename : filename);
+        }
     }
     return 1;
 }
@@ -4067,6 +4086,7 @@ void editor_execute_command(void) {
                             errs++;
                         } else {
                             undofile_save(E.buf.filename, &E.undo_tree);
+                            recovery_remove(E.buf.filename);
                             E.buftabs[E.cur_buftab].watch_skip++;
                             filewatcher_add(E.cur_buftab);
                         }
@@ -4083,6 +4103,7 @@ void editor_execute_command(void) {
                                 errs++;
                             } else {
                                 undofile_save(b->filename, &E.buftabs[i].undo_tree);
+                                recovery_remove(b->filename);
                                 E.buftabs[i].watch_skip++;
                                 filewatcher_add(i);
                             }
@@ -4108,6 +4129,7 @@ void editor_execute_command(void) {
                     if (buf_save(&E.buf) == 0) {
                         editor_update_git_signs();
                         undofile_save(E.buf.filename, &E.undo_tree);
+                        recovery_remove(E.buf.filename);
                         E.buftabs[E.cur_buftab].watch_skip++;
                         filewatcher_add(E.cur_buftab);
                         if (!dq) status_msg("\"%s\" written", E.buf.filename);
@@ -6416,6 +6438,37 @@ void editor_process_keypress(void) {
                      "\"%s\" reloaded", base ? base : "");
         }
         /* O, Escape, Enter, or anything else = keep local version */
+        return;
+    }
+
+    /* Recovery prompt: only accept i/r/d, ignore everything else. */
+    if (E.recovery_prompt_buf >= 0) {
+        if (c != 'i' && c != 'r' && c != 'd') return;
+
+        int bidx = E.recovery_prompt_buf;
+        E.recovery_prompt_buf = -1;
+        E.statusmsg[0] = '\0';
+        E.statusmsg_is_error = 0;
+
+        const char *fname = (bidx == E.cur_buftab) ? E.buf.filename
+                                                    : E.buftabs[bidx].buf.filename;
+        if (c == 'r') {
+            Buffer *b = (bidx == E.cur_buftab) ? &E.buf : &E.buftabs[bidx].buf;
+            int rx, ry;
+            if (recovery_load(fname, b, &rx, &ry) == 0) {
+                if (bidx == E.cur_buftab) { E.cx = rx; E.cy = ry; }
+                else { E.buftabs[bidx].cx = rx; E.buftabs[bidx].cy = ry; }
+                const char *base = fname ? strrchr(fname, '/') : NULL;
+                base = base ? base + 1 : fname;
+                snprintf(E.statusmsg, sizeof(E.statusmsg),
+                         "Recovered \"%s\" (unsaved)", base ? base : "");
+            }
+            /* Keep recovery file per spec */
+        } else if (c == 'd') {
+            recovery_remove(fname);
+            snprintf(E.statusmsg, sizeof(E.statusmsg), "Recovery file deleted");
+        }
+        /* 'i' = ignore, file already loaded from disk */
         return;
     }
 
