@@ -2680,7 +2680,7 @@ static void diff_close(void) {
     E.match_bracket_valid = 0;
 }
 
-static void diff_open(void) {
+void diff_open(void) {
     /* Route to split mode if configured. */
     if (E.opts.diffstyle == DIFFSTYLE_SPLIT) { diff_open_split(); return; }
 

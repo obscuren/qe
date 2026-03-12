@@ -60,39 +60,6 @@ static int cmd_cat(int argc, char **argv) {
     return 0;
 }
 
-/* ── Diff ────────────────────────────────────────────────────────────── */
-
-static int cmd_diff(int argc, char **argv) {
-    if (argc < 3) { fprintf(stderr, "Usage: qe diff <file>\n"); return 1; }
-    const char *file = argv[2];
-
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd), "git diff HEAD -- '%s' 2>/dev/null", file);
-    FILE *fp = popen(cmd, "r");
-    if (!fp) { fprintf(stderr, "qe: git diff failed\n"); return 1; }
-
-    char *line = NULL;
-    size_t cap = 0;
-    ssize_t len;
-    while ((len = getline(&line, &cap, fp)) > 0) {
-        if (len > 0 && line[len-1] == '\n') line[--len] = '\0';
-        if (line[0] == '+' && !(len >= 3 && line[1] == '+' && line[2] == '+'))
-            printf("\x1b[32m%s\x1b[m\n", line);       /* green */
-        else if (line[0] == '-' && !(len >= 3 && line[1] == '-' && line[2] == '-'))
-            printf("\x1b[31m%s\x1b[m\n", line);       /* red */
-        else if (len >= 2 && line[0] == '@' && line[1] == '@')
-            printf("\x1b[36m%s\x1b[m\n", line);       /* cyan */
-        else if (strncmp(line, "diff ", 5) == 0 || strncmp(line, "index ", 6) == 0 ||
-                 strncmp(line, "---", 3) == 0 || strncmp(line, "+++", 3) == 0)
-            printf("\x1b[1m%s\x1b[m\n", line);        /* bold */
-        else
-            printf("%s\n", line);
-    }
-    free(line);
-    int status = pclose(fp);
-    return WEXITSTATUS(status);
-}
-
 /* ── Blame ───────────────────────────────────────────────────────────── */
 
 static int cmd_blame(int argc, char **argv) {
@@ -189,7 +156,6 @@ typedef struct {
 
 static const BuiltinCmd builtins[] = {
     {"cat",   cmd_cat},
-    {"diff",  cmd_diff},
     {"blame", cmd_blame},
     {"log",   cmd_log},
     {"grep",  cmd_grep},
@@ -238,7 +204,7 @@ int cli_dispatch(int argc, char **argv, int *out_line, int *out_readonly,
                    "\n"
                    "Commands:\n"
                    "    cat <file>                          Syntax-highlighted file output\n"
-                   "    diff [file]                         Show git diff\n"
+                   "    diff <file>                         Open file with diff view\n"
                    "    blame <file>                        Show git blame\n"
                    "    log [-n N]                          Show git log\n"
                    "    grep <pat> [path]                   Search files\n",
