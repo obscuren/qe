@@ -7,15 +7,18 @@
 }
 
 :root {
-    --bg:        #0d1117;
-    --bg-card:   #161b22;
-    --bg-code:   #1c2128;
-    --border:    #30363d;
-    --text:      #c9d1d9;
-    --text-dim:  #8b949e;
+    --bg:        #0a0e13;
+    --bg-card:   #111820;
+    --bg-code:   #0f1419;
+    --border:    #1e2a3a;
+    --border-hi: #2a3a4e;
+    --text:      #c4cdd9;
+    --text-dim:  #5a6a7e;
     --accent:    #58a6ff;
-    --green:     #3fb950;
-    --yellow:    #d29922;
+    --green:     #3ddc84;
+    --green-dim: rgba(61, 220, 132, 0.08);
+    --green-glow:rgba(61, 220, 132, 0.15);
+    --yellow:    #e2b93d;
     --red:       #f85149;
     --cyan:      #79c0ff;
     --purple:    #bc8cff;
@@ -26,10 +29,22 @@ html {
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-family: 'Space Grotesk', -apple-system, sans-serif;
     background: var(--bg);
     color: var(--text);
     line-height: 1.6;
+    overflow-x: hidden;
+}
+
+/* subtle dot grid background */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 32px 32px;
+    pointer-events: none;
+    z-index: 0;
 }
 
 a {
@@ -42,22 +57,44 @@ a:hover {
 }
 
 code {
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
-    font-size: 0.9em;
-    background: var(--bg-code);
-    padding: 0.15em 0.4em;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85em;
+    background: rgba(61, 220, 132, 0.06);
+    color: var(--green);
+    padding: 0.15em 0.45em;
     border-radius: 4px;
+    border: 1px solid rgba(61, 220, 132, 0.1);
 }
 
 pre {
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
-    font-size: 0.85rem;
-    line-height: 1.5;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    line-height: 1.55;
 }
 
 pre code {
     background: none;
     padding: 0;
+    border: none;
+    color: inherit;
+}
+
+/* ── Animations ──────────────────────────────────────────────────── */
+
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-up {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.fade-up.visible {
+    opacity: 1;
+    transform: translateY(0);
 }
 
 /* ── Navigation ──────────────────────────────────────────────────── */
@@ -67,8 +104,8 @@ nav {
     top: 0;
     width: 100%;
     z-index: 100;
-    background: rgba(13, 17, 23, 0.85);
-    backdrop-filter: blur(12px);
+    background: rgba(10, 14, 19, 0.8);
+    backdrop-filter: blur(16px) saturate(1.2);
     border-bottom: 1px solid var(--border);
 }
 
@@ -82,16 +119,20 @@ nav {
 }
 
 .logo {
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 1.4rem;
-    font-weight: 700;
+    font-weight: 800;
     color: var(--green);
     text-decoration: none;
+    letter-spacing: -0.02em;
+    text-shadow: 0 0 20px rgba(61, 220, 132, 0.3);
+    transition: text-shadow 0.3s;
 }
 
 .logo:hover {
     text-decoration: none;
     color: var(--green);
+    text-shadow: 0 0 30px rgba(61, 220, 132, 0.5);
 }
 
 .nav-links {
@@ -102,7 +143,9 @@ nav {
 
 .nav-links a {
     color: var(--text-dim);
-    font-size: 0.9rem;
+    font-size: 0.88rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
     transition: color 0.2s;
 }
 
@@ -117,12 +160,13 @@ nav {
     padding: 0.4rem 1rem;
     border-radius: 6px;
     color: var(--text) !important;
-    font-size: 0.85rem;
-    transition: border-color 0.2s;
+    font-size: 0.84rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .btn-gh:hover {
     border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(88, 166, 255, 0.1);
     text-decoration: none !important;
 }
 
@@ -131,41 +175,70 @@ nav {
 .hero {
     max-width: 900px;
     margin: 0 auto;
-    padding: 8rem 1.5rem 4rem;
+    padding: 9rem 1.5rem 4rem;
     text-align: center;
+    position: relative;
+}
+
+/* radial glow behind hero */
+.hero::before {
+    content: '';
+    position: absolute;
+    top: 4rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    height: 400px;
+    background: radial-gradient(ellipse, rgba(61, 220, 132, 0.06) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: -1;
 }
 
 .hero h1 {
-    font-size: 3.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 4rem;
     font-weight: 800;
-    background: linear-gradient(135deg, var(--green), var(--cyan));
+    letter-spacing: -0.04em;
+    color: #e8edf3;
+    margin-bottom: 1rem;
+    animation: fadeUp 0.7s ease both;
+}
+
+.hero h1 .accent {
+    background: linear-gradient(135deg, var(--green), #79c0ff);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    margin-bottom: 1rem;
 }
 
 .tagline {
-    font-size: 1.25rem;
+    font-size: 1.2rem;
     color: var(--text-dim);
-    max-width: 600px;
+    max-width: 560px;
     margin: 0 auto 0.5rem;
+    font-weight: 400;
+    animation: fadeUp 0.7s ease 0.1s both;
 }
 
 .research-note {
-    font-size: 0.85rem;
-    color: #6e7681;
+    font-size: 0.82rem;
+    color: #3d4a5c;
     margin: 0.25rem auto 2.5rem;
+    animation: fadeUp 0.7s ease 0.15s both;
 }
 
 .research-note a {
-    color: var(--accent);
+    color: var(--text-dim);
     text-decoration: none;
     font-weight: 500;
+    border-bottom: 1px solid var(--border);
+    transition: color 0.2s, border-color 0.2s;
 }
 
 .research-note a:hover {
-    text-decoration: underline;
+    color: var(--accent);
+    border-color: var(--accent);
+    text-decoration: none;
 }
 
 /* ── Terminal window ─────────────────────────────────────────────── */
@@ -173,26 +246,30 @@ nav {
 .terminal-window {
     background: var(--bg-code);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 12px;
     overflow: hidden;
     text-align: left;
     max-width: 700px;
     margin: 0 auto 2.5rem;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.3),
+        0 16px 48px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    animation: fadeUp 0.7s ease 0.2s both;
 }
 
 .terminal-bar {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 0.6rem 0.8rem;
-    background: #21262d;
+    padding: 0.65rem 0.9rem;
+    background: #141b24;
     border-bottom: 1px solid var(--border);
 }
 
 .dot {
-    width: 12px;
-    height: 12px;
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
 }
 
@@ -202,9 +279,9 @@ nav {
 
 .terminal-title {
     margin-left: 0.5rem;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: var(--text-dim);
-    font-family: 'SF Mono', monospace;
+    font-family: 'JetBrains Mono', monospace;
 }
 
 .terminal-body {
@@ -218,16 +295,18 @@ nav {
 .terminal-body .ty   { color: var(--cyan); }
 .terminal-body .str  { color: var(--green); }
 .terminal-body .num  { color: var(--purple); }
-.terminal-body .fn   { color: var(--text); font-weight: 600; }
+.terminal-body .fn   { color: #e8edf3; font-weight: 600; }
 .terminal-body .comment { color: var(--text-dim); }
 
 .status-bar {
     display: block;
-    background: #c9d1d9;
-    color: #0d1117;
+    background: var(--green);
+    color: #0a0e13;
     margin: 0.5rem -1.2rem -1rem;
     padding: 0.15rem 1.2rem;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
 }
 
 /* ── Hero buttons ────────────────────────────────────────────────── */
@@ -236,36 +315,41 @@ nav {
     display: flex;
     gap: 1rem;
     justify-content: center;
+    animation: fadeUp 0.7s ease 0.3s both;
 }
 
 .btn-primary {
     background: var(--green);
-    color: #0d1117 !important;
-    padding: 0.6rem 1.8rem;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 0.95rem;
-    transition: opacity 0.2s;
+    color: #0a0e13 !important;
+    padding: 0.65rem 2rem;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 0.92rem;
+    letter-spacing: 0.01em;
+    transition: transform 0.15s, box-shadow 0.2s;
+    box-shadow: 0 0 20px rgba(61, 220, 132, 0.15);
 }
 
 .btn-primary:hover {
-    opacity: 0.9;
+    transform: translateY(-1px);
+    box-shadow: 0 0 30px rgba(61, 220, 132, 0.25);
     text-decoration: none !important;
 }
 
 .btn-secondary {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
+    background: transparent;
+    border: 1px solid var(--border-hi);
     color: var(--text) !important;
-    padding: 0.6rem 1.8rem;
-    border-radius: 6px;
+    padding: 0.65rem 2rem;
+    border-radius: 8px;
     font-weight: 500;
-    font-size: 0.95rem;
-    transition: border-color 0.2s;
+    font-size: 0.92rem;
+    transition: border-color 0.2s, background 0.2s;
 }
 
 .btn-secondary:hover {
-    border-color: var(--accent);
+    border-color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.02);
     text-decoration: none !important;
 }
 
@@ -276,14 +360,17 @@ nav {
     max-width: 650px;
     margin-left: auto;
     margin-right: auto;
+    animation: fadeUp 0.7s ease 0.35s both;
 }
 
 .one-liner-window {
     background: var(--bg-code);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 12px;
     overflow: hidden;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.2),
+        0 16px 48px rgba(0, 0, 0, 0.2);
 }
 
 .one-liner-bar {
@@ -291,14 +378,14 @@ nav {
     align-items: center;
     gap: 6px;
     padding: 0.6rem 0.8rem;
-    background: #21262d;
+    background: #141b24;
     border-bottom: 1px solid var(--border);
 }
 
 .one-liner-body {
     padding: 1.2rem 1.4rem;
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
-    font-size: 0.9rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.88rem;
 }
 
 .one-liner-comment {
@@ -351,7 +438,7 @@ nav {
     text-align: center;
     margin-top: 0.8rem;
     color: var(--text-dim);
-    font-size: 0.82rem;
+    font-size: 0.8rem;
 }
 
 /* ── Features ────────────────────────────────────────────────────── */
@@ -359,56 +446,85 @@ nav {
 .features {
     max-width: 1100px;
     margin: 0 auto;
-    padding: 4rem 1.5rem;
+    padding: 5rem 1.5rem;
+    position: relative;
+    border-top: 1px solid var(--border);
 }
 
 .features h2 {
-    font-size: 2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.8rem;
     font-weight: 700;
     text-align: center;
-    margin-bottom: 3rem;
+    margin-bottom: 3.5rem;
+    letter-spacing: -0.03em;
+    color: #e8edf3;
 }
 
 .feature-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 1.5rem;
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    gap: 1.25rem;
 }
 
 .feature-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.5rem;
-    transition: border-color 0.2s;
+    border-radius: 10px;
+    padding: 1.6rem;
+    transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+    position: relative;
+    overflow: hidden;
+}
+
+/* subtle top-edge glow on hover */
+.feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--green), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
 }
 
 .feature-card:hover {
-    border-color: var(--accent);
+    border-color: var(--border-hi);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    transform: translateY(-2px);
+}
+
+.feature-card:hover::before {
+    opacity: 1;
 }
 
 .feature-icon {
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-    font-size: 1.1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.95rem;
     font-weight: 700;
     color: var(--green);
-    margin-bottom: 0.75rem;
-    background: rgba(63, 185, 80, 0.1);
+    margin-bottom: 0.85rem;
+    background: var(--green-dim);
     display: inline-block;
-    padding: 0.3rem 0.6rem;
-    border-radius: 4px;
+    padding: 0.35rem 0.65rem;
+    border-radius: 6px;
+    border: 1px solid rgba(61, 220, 132, 0.08);
 }
 
 .feature-card h3 {
-    font-size: 1.1rem;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.05rem;
     font-weight: 600;
     margin-bottom: 0.5rem;
+    color: #e8edf3;
 }
 
 .feature-card p {
     color: var(--text-dim);
-    font-size: 0.9rem;
-    line-height: 1.6;
+    font-size: 0.88rem;
+    line-height: 1.65;
 }
 
 /* ── Install ─────────────────────────────────────────────────────── */
@@ -416,24 +532,30 @@ nav {
 .install {
     max-width: 700px;
     margin: 0 auto;
-    padding: 4rem 1.5rem;
+    padding: 5rem 1.5rem;
+    border-top: 1px solid var(--border);
 }
 
 .install h2 {
-    font-size: 2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.8rem;
     font-weight: 700;
     text-align: center;
     margin-bottom: 2.5rem;
+    letter-spacing: -0.03em;
+    color: #e8edf3;
 }
 
 .install h3 {
-    font-size: 1.15rem;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.1rem;
     font-weight: 600;
     margin: 2rem 0 0.75rem;
+    color: #e8edf3;
 }
 
 .install h4 {
-    font-size: 0.95rem;
+    font-size: 0.88rem;
     font-weight: 500;
     color: var(--text-dim);
     margin-bottom: 0.5rem;
@@ -446,7 +568,7 @@ nav {
 .install pre {
     background: var(--bg-code);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 1rem 1.2rem;
     overflow-x: auto;
 }
@@ -456,44 +578,55 @@ nav {
 .docs {
     max-width: 1100px;
     margin: 0 auto;
-    padding: 4rem 1.5rem;
+    padding: 5rem 1.5rem;
+    border-top: 1px solid var(--border);
 }
 
 .docs h2 {
-    font-size: 2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.8rem;
     font-weight: 700;
     text-align: center;
-    margin-bottom: 3rem;
+    margin-bottom: 3.5rem;
+    letter-spacing: -0.03em;
+    color: #e8edf3;
 }
 
 .docs-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1.5rem;
+    gap: 1.25rem;
 }
 
 .doc-section {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 1.5rem;
+    transition: border-color 0.2s;
+}
+
+.doc-section:hover {
+    border-color: var(--border-hi);
 }
 
 .doc-section h3 {
-    font-size: 1rem;
-    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    font-weight: 700;
     margin-bottom: 1rem;
     color: var(--green);
+    letter-spacing: 0.02em;
 }
 
 .doc-section table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.85rem;
+    font-size: 0.84rem;
 }
 
 .doc-section td {
-    padding: 0.3rem 0;
+    padding: 0.35rem 0;
     vertical-align: top;
 }
 
@@ -510,16 +643,17 @@ nav {
 .doc-section pre {
     background: var(--bg-code);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 0.8rem 1rem;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     overflow-x: auto;
 }
 
 .docs-full {
     text-align: center;
-    margin-top: 2rem;
+    margin-top: 2.5rem;
     color: var(--text-dim);
+    font-size: 0.88rem;
 }
 
 /* ── Footer ──────────────────────────────────────────────────────── */
@@ -529,7 +663,7 @@ footer {
     padding: 3rem 1.5rem;
     border-top: 1px solid var(--border);
     color: var(--text-dim);
-    font-size: 0.85rem;
+    font-size: 0.84rem;
 }
 
 footer p + p {
@@ -540,11 +674,11 @@ footer p + p {
 
 @media (max-width: 640px) {
     .hero h1 {
-        font-size: 2.5rem;
+        font-size: 2.8rem;
     }
 
     .tagline {
-        font-size: 1.05rem;
+        font-size: 1.02rem;
     }
 
     .feature-grid,
