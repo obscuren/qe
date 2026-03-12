@@ -857,6 +857,47 @@ if sel then qe.set_register("a", sel) end
 local clip = qe.get_register("+")
 ```
 
+### Git Queries
+
+| Function | Returns | Description |
+|---|---|---|
+| `qe.git_branch()` | `string` or `nil` | Current branch name (detached HEAD returns short SHA) |
+| `qe.git_status()` | `table` or `nil` | `{staged={...}, unstaged={...}}` file lists |
+| `qe.git_diff_signs()` | `table` or `nil` | Per-line sign chars (`"+"`, `"~"`, `"-"`, `" "`) for current buffer |
+| `qe.git_log([limit])` | `table` or `nil` | Array of `{hash, date, author, subject}` (default limit 50) |
+| `qe.git_blame()` | `table` or `nil` | Array of blame prefix strings for current buffer |
+
+All git functions are read-only. `git_branch` and `git_diff_signs` read cached editor state (fast); `git_status`, `git_log`, and `git_blame` shell out to git (avoid calling in tight loops).
+
+```lua
+-- Statusline: show branch name
+local branch = qe.git_branch()
+if branch then qe.print("on " .. branch) end
+
+-- List modified files
+local st = qe.git_status()
+if st then
+    for _, f in ipairs(st.unstaged) do
+        qe.print("modified: " .. f)
+    end
+end
+
+-- Show diff sign for current line
+local signs = qe.git_diff_signs()
+if signs then
+    local row = qe.get_cursor()
+    qe.print("sign: " .. signs[row + 1])  -- signs are 1-indexed
+end
+
+-- Browse recent commits
+local log = qe.git_log(10)
+if log then
+    for _, e in ipairs(log) do
+        qe.print(e.hash .. " " .. e.subject)
+    end
+end
+```
+
 ### `qe.add_syntax(def)`
 
 Register a syntax definition for one or more file types. The highlighting engine is built into the editor; this call supplies the language-specific rules.
