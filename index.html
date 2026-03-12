@@ -238,6 +238,8 @@ sudo cmake --install build    <span class="comment"># installs to /usr/local/bin
                 <tr><td><code>;</code> / <code>,</code></td><td>Repeat last find / reverse</td></tr>
                 <tr><td><code>{</code> / <code>}</code></td><td>Paragraph up / down</td></tr>
                 <tr><td><code>%</code></td><td>Matching bracket</td></tr>
+                <tr><td><code>gd</code></td><td>Go to local definition</td></tr>
+                <tr><td><code>]c</code> / <code>[c</code></td><td>Next / prev git hunk</td></tr>
                 <tr><td><code>ma</code> / <code>'a</code></td><td>Set mark / jump to mark</td></tr>
                 <tr><td><code>Ctrl-O</code> / <code>Ctrl-I</code></td><td>Jump list back / forward</td></tr>
             </table>
@@ -254,6 +256,7 @@ sudo cmake --install build    <span class="comment"># installs to /usr/local/bin
                 <tr><td><code>p</code> / <code>P</code></td><td>Paste after / before</td></tr>
                 <tr><td><code>.</code></td><td>Repeat last change</td></tr>
                 <tr><td><code>u</code> / <code>Ctrl-R</code></td><td>Undo / redo</td></tr>
+                <tr><td><code>g-</code> / <code>g+</code></td><td>Earlier / later undo state</td></tr>
             </table>
         </div>
 
@@ -278,9 +281,13 @@ sudo cmake --install build    <span class="comment"># installs to /usr/local/bin
                 <tr><td><code>:Tree</code></td><td>File tree sidebar</td></tr>
                 <tr><td><code>:grep pattern</code></td><td>Search across files</td></tr>
                 <tr><td><code>:Gblame</code> / <code>:Gdiff</code></td><td>Git blame / diff</td></tr>
-                <tr><td><code>:Glog</code> / <code>:Gcommit</code></td><td>Git log / commit</td></tr>
+                <tr><td><code>:Glog</code> / <code>:Gcommit</code></td><td>Git log / interactive commit</td></tr>
+                <tr><td><code>:Gadd</code> / <code>:Greset</code></td><td>Stage / unstage file</td></tr>
+                <tr><td><code>:Gstash</code> / <code>:Gpop</code></td><td>Stash / pop changes</td></tr>
                 <tr><td><code>:</code><em>N</em></td><td>Jump to line N</td></tr>
                 <tr><td><code>:bn</code> / <code>:bp</code> / <code>:b N</code></td><td>Next / prev / Nth buffer</td></tr>
+                <tr><td><code>:cn</code> / <code>:cp</code></td><td>Next / prev quickfix result</td></tr>
+                <tr><td><code>:close</code> / <code>:only</code></td><td>Close pane / keep only current</td></tr>
                 <tr><td><code>:revisions</code></td><td>Browse undo tree</td></tr>
                 <tr><td><code>:mksession</code> / <code>:source</code></td><td>Save / restore session</td></tr>
                 <tr><td><code>:set nu</code> / <code>:set nonu</code></td><td>Show / hide line numbers</td></tr>
@@ -314,6 +321,23 @@ qe.add_syntax({
                 <tr><td><code>"+yy</code> / <code>"+p</code></td><td>System clipboard yank / paste</td></tr>
                 <tr><td><code>:reg</code></td><td>View all registers</td></tr>
             </table>
+        </div>
+
+        <div class="doc-section">
+            <h3>Leader Keys</h3>
+            <table>
+                <tr><td><code>&lt;leader&gt;t</code></td><td>Fuzzy file finder</td></tr>
+                <tr><td><code>&lt;leader&gt;b</code></td><td>Fuzzy buffer picker</td></tr>
+                <tr><td><code>&lt;leader&gt;r</code></td><td>Local revisions browser</td></tr>
+                <tr><td><code>&lt;leader&gt;x</code></td><td>Open terminal</td></tr>
+                <tr><td><code>&lt;leader&gt;hs</code></td><td>Stage hunk under cursor</td></tr>
+                <tr><td><code>&lt;leader&gt;hr</code></td><td>Revert hunk to HEAD</td></tr>
+                <tr><td><code>&lt;leader&gt;gb</code></td><td>Git blame</td></tr>
+                <tr><td><code>&lt;leader&gt;gd</code></td><td>Git diff</td></tr>
+                <tr><td><code>&lt;leader&gt;gl</code></td><td>Git log</td></tr>
+                <tr><td><code>&lt;leader&gt;gc</code></td><td>Git commit</td></tr>
+            </table>
+            <p style="margin-top:0.5em;font-size:0.85em;opacity:0.6">Default leader: <code>Space</code></p>
         </div>
 
     </div>
