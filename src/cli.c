@@ -217,6 +217,31 @@ int cli_dispatch(int argc, char **argv, int *out_line, int *out_readonly) {
         }
     }
 
+    /* --help / -h */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("Quick Ed - Qe %s (%s %s)\n"
+                   "\n"
+                   "Usage: qe [arguments] [file ..]         edit specific file(s)\n"
+                   "   or: qe [command]                     execute subcommand\n"
+                   "\n"
+                   "Arguments:\n"
+                   "    -h, --help                          This help\n"
+                   "    -v, --version                       Display Qe version number\n"
+                   "    +N                                  Open file at line N\n"
+                   "    -R                                  Read-only mode\n"
+                   "\n"
+                   "Commands:\n"
+                   "    cat <file>                          Syntax-highlighted file output\n"
+                   "    diff [file]                         Show git diff\n"
+                   "    blame <file>                        Show git blame\n"
+                   "    log [-n N]                          Show git log\n"
+                   "    grep <pat> [path]                   Search files\n",
+                   QE_VERSION, __DATE__, __TIME__);
+            return 0;
+        }
+    }
+
     /* Need at least a subcommand argument. */
     if (argc < 2) return -1;
     const char *cmd = argv[1];
