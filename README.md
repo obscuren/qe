@@ -935,6 +935,51 @@ qe.on("BufOpen", function(filename)
 end)
 ```
 
+### Shell Execution
+
+| Function | Returns | Description |
+|---|---|---|
+| `qe.exec(cmd)` | `stdout, exit_code` | Run a command synchronously (blocks UI) |
+| `qe.exec_async(cmd, callback)` | — | Run a command asynchronously; callback receives `(stdout, exit_code)` |
+
+`exec` blocks the editor until the command finishes — use it for fast commands like formatters or git queries. `exec_async` returns immediately and fires the callback when the process exits, keeping the editor responsive during builds or linters.
+
+Both capture stdout and stderr. Output is capped at 64KB.
+
+```lua
+-- Synchronous: format current file
+local filename = qe.get_filename()
+if filename and filename:match("%.go$") then
+    local output, code = qe.exec("gofmt -w " .. filename)
+    if code == 0 then
+        qe.command("e " .. filename)  -- reload
+        qe.print("formatted")
+    else
+        qe.print("gofmt error: " .. output)
+    end
+end
+
+-- Asynchronous: run make in the background
+qe.exec_async("make -j4 2>&1", function(output, code)
+    if code == 0 then
+        qe.print("Build succeeded")
+    else
+        qe.print("Build failed (exit " .. code .. ")")
+    end
+end)
+
+-- Async linter
+qe.on("BufSave", function(filename)
+    if filename:match("%.py$") then
+        qe.exec_async("flake8 " .. filename, function(output, code)
+            if code ~= 0 then
+                qe.print("lint: " .. output:match("[^\n]+"))
+            end
+        end)
+    end
+end)
+```
+
 ### `qe.add_syntax(def)`
 
 Register a syntax definition for one or more file types. The highlighting engine is built into the editor; this call supplies the language-specific rules.

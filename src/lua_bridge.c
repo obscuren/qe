@@ -9,9 +9,13 @@
 #include <lauxlib.h>
 #include <lualib.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 /* ── State ───────────────────────────────────────────────────────────── */
 
@@ -689,6 +693,86 @@ static int l_on(lua_State *LS) {
     return 0;
 }
 
+/* ── Tier 5: Shell execution ──────────────────────────────────────────── */
+
+static int l_exec(lua_State *LS) {
+    const char *cmd = luaL_checkstring(LS, 1);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        lua_pushnil(LS);
+        lua_pushinteger(LS, -1);
+        return 2;
+    }
+
+    luaL_Buffer lb;
+    luaL_buffinit(LS, &lb);
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), fp))
+        luaL_addstring(&lb, buf);
+    luaL_pushresult(&lb);
+
+    int status = pclose(fp);
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    lua_pushinteger(LS, code);
+    return 2;
+}
+
+static int l_exec_async(lua_State *LS) {
+    const char *cmd = luaL_checkstring(LS, 1);
+    luaL_checktype(LS, 2, LUA_TFUNCTION);
+
+    /* Find a free slot. */
+    int slot = -1;
+    for (int i = 0; i < MAX_ASYNC_CMDS; i++) {
+        if (!E.async_cmds[i].active) { slot = i; break; }
+    }
+    if (slot < 0)
+        return luaL_error(LS, "too many async commands (max %d)", MAX_ASYNC_CMDS);
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0)
+        return luaL_error(LS, "pipe() failed: %s", strerror(errno));
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]); close(pipefd[1]);
+        return luaL_error(LS, "fork() failed: %s", strerror(errno));
+    }
+
+    if (pid == 0) {
+        /* Child: redirect stdout+stderr to pipe, exec command. */
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        _exit(127);
+    }
+
+    /* Parent: set up non-blocking read end. */
+    close(pipefd[1]);
+    int flags = fcntl(pipefd[0], F_GETFL);
+    if (flags >= 0) fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+
+    AsyncCmd *ac = &E.async_cmds[slot];
+    ac->active      = 1;
+    ac->pid         = pid;
+    ac->pipe_fd     = pipefd[0];
+    ac->output      = malloc(4096);
+    ac->output_len  = 0;
+    ac->output_cap  = 4096;
+    ac->exited      = 0;
+    ac->exit_status = -1;
+
+    lua_pushvalue(LS, 2);
+    ac->lua_cb_ref = luaL_ref(LS, LUA_REGISTRYINDEX);
+
+    if (E.num_async_cmds <= slot)
+        E.num_async_cmds = slot + 1;
+
+    return 0;
+}
+
 static const luaL_Reg qe_lib[] = {
     {"set_option",   l_set_option},
     {"print",        l_print},
@@ -723,6 +807,9 @@ static const luaL_Reg qe_lib[] = {
     {"git_blame",      l_git_blame},
     /* Tier 4: Event hooks */
     {"on",             l_on},
+    /* Tier 5: Shell execution */
+    {"exec",           l_exec},
+    {"exec_async",     l_exec_async},
     {NULL,           NULL}
 };
 
@@ -839,6 +926,80 @@ const char *editor_mode_str(EditorMode m) {
     case MODE_VISUAL_BLOCK: return "visual_block";
     case MODE_FUZZY:        return "fuzzy";
     default:                return "unknown";
+    }
+}
+
+/* ── Async drain / reap ───────────────────────────────────────────────── */
+
+void lua_bridge_drain_async(void) {
+    for (int i = 0; i < E.num_async_cmds; i++) {
+        AsyncCmd *ac = &E.async_cmds[i];
+        if (!ac->active || ac->pipe_fd < 0) continue;
+
+        char buf[4096];
+        for (;;) {
+            ssize_t nr = read(ac->pipe_fd, buf, sizeof(buf));
+            if (nr <= 0) break;
+            /* Grow buffer if needed, respecting cap. */
+            int avail = ASYNC_OUTPUT_MAX - ac->output_len;
+            int to_copy = (int)nr < avail ? (int)nr : avail;
+            if (to_copy > 0) {
+                while (ac->output_len + to_copy > ac->output_cap) {
+                    ac->output_cap *= 2;
+                    if (ac->output_cap > ASYNC_OUTPUT_MAX)
+                        ac->output_cap = ASYNC_OUTPUT_MAX;
+                    ac->output = realloc(ac->output, ac->output_cap);
+                }
+                memcpy(ac->output + ac->output_len, buf, to_copy);
+                ac->output_len += to_copy;
+            }
+        }
+
+        /* Check if child exited (non-blocking). */
+        if (!ac->exited) {
+            int status;
+            pid_t ret = waitpid(ac->pid, &status, WNOHANG);
+            if (ret == ac->pid) {
+                ac->exited = 1;
+                ac->exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            }
+        }
+    }
+}
+
+void lua_bridge_reap_async(void) {
+    if (!L) return;
+    for (int i = 0; i < E.num_async_cmds; i++) {
+        AsyncCmd *ac = &E.async_cmds[i];
+        if (!ac->active || !ac->exited) continue;
+
+        /* Close pipe and drain any remaining data. */
+        if (ac->pipe_fd >= 0) {
+            close(ac->pipe_fd);
+            ac->pipe_fd = -1;
+        }
+
+        /* Call the Lua callback with (output, exit_code). */
+        lua_rawgeti(L, LUA_REGISTRYINDEX, ac->lua_cb_ref);
+        lua_pushlstring(L, ac->output, ac->output_len);
+        lua_pushinteger(L, ac->exit_status);
+        if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+            snprintf(E.statusmsg, sizeof(E.statusmsg),
+                     "lua [async]: %s", lua_tostring(L, -1));
+            E.statusmsg_is_error = 1;
+            lua_pop(L, 1);
+        }
+
+        /* Clean up. */
+        luaL_unref(L, LUA_REGISTRYINDEX, ac->lua_cb_ref);
+        free(ac->output);
+        memset(ac, 0, sizeof(*ac));
+
+        /* Shrink num_async_cmds if trailing slots are empty. */
+        while (E.num_async_cmds > 0 && !E.async_cmds[E.num_async_cmds - 1].active)
+            E.num_async_cmds--;
+
+        return;  /* one per tick, like terminal reap */
     }
 }
 

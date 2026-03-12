@@ -52,7 +52,9 @@ int main(int argc, char *argv[]) {
     while (1) {
         if (g_resized) { g_resized = 0; editor_handle_resize(); }
         editor_drain_terminals();
+        lua_bridge_drain_async();
         editor_reap_terminals();
+        lua_bridge_reap_async();
         editor_refresh_screen();
         editor_poll_for_input();
     }

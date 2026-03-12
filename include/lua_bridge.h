@@ -16,5 +16,9 @@ void lua_bridge_fire_event(const char *event, const char *arg1,
                            const char *arg2);
 /* Convert an EditorMode enum to its Lua string name. */
 const char *editor_mode_str(EditorMode m);
+/* Drain output from async Lua commands (non-blocking reads). */
+void lua_bridge_drain_async(void);
+/* Reap finished async Lua commands and fire their callbacks. */
+void lua_bridge_reap_async(void);
 
 #endif

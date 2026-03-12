@@ -293,7 +293,7 @@ void editor_drain_terminals(void) {
 }
 
 int editor_poll_for_input(void) {
-    struct pollfd pfds[2 + MAX_BUFS];
+    struct pollfd pfds[2 + MAX_BUFS + MAX_ASYNC_CMDS];
     int nfds = 0;
     int inotify_slot = -1;
     pfds[nfds++] = (struct pollfd){ .fd = STDIN_FILENO, .events = POLLIN };
@@ -306,6 +306,12 @@ int editor_poll_for_input(void) {
             && E.buftabs[i].term->pty_fd >= 0)
             pfds[nfds++] = (struct pollfd){
                 .fd = E.buftabs[i].term->pty_fd, .events = POLLIN };
+    }
+
+    for (int i = 0; i < E.num_async_cmds; i++) {
+        if (E.async_cmds[i].active && E.async_cmds[i].pipe_fd >= 0)
+            pfds[nfds++] = (struct pollfd){
+                .fd = E.async_cmds[i].pipe_fd, .events = POLLIN };
     }
 
     int pr = poll(pfds, nfds, 2000);
