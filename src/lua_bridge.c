@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "lua_bridge.h"
 #include "editor.h"
+#include "git.h"
 #include "input.h"
 #include "syntax.h"
 
@@ -537,6 +538,117 @@ static int l_set_register(lua_State *LS) {
     return 0;
 }
 
+/* ── Tier 3: Git queries ─────────────────────────────────────────────── */
+
+static int l_git_branch(lua_State *LS) {
+    if (E.git_branch[0] == '\0')
+        lua_pushnil(LS);
+    else
+        lua_pushstring(LS, E.git_branch);
+    return 1;
+}
+
+static int l_git_status(lua_State *LS) {
+    GitStatus st = git_status_files();
+    if (!st.staged && !st.unstaged) {
+        lua_pushnil(LS);
+        return 1;
+    }
+
+    lua_newtable(LS);
+
+    lua_newtable(LS);
+    for (int i = 0; i < st.staged_count; i++) {
+        lua_pushstring(LS, st.staged[i]);
+        lua_rawseti(LS, -2, i + 1);
+    }
+    lua_setfield(LS, -2, "staged");
+
+    lua_newtable(LS);
+    for (int i = 0; i < st.unstaged_count; i++) {
+        lua_pushstring(LS, st.unstaged[i]);
+        lua_rawseti(LS, -2, i + 1);
+    }
+    lua_setfield(LS, -2, "unstaged");
+
+    git_status_free(&st);
+    return 1;
+}
+
+static int l_git_diff_signs(lua_State *LS) {
+    if (!E.buf.git_signs || E.buf.git_signs_count <= 0) {
+        lua_pushnil(LS);
+        return 1;
+    }
+
+    lua_createtable(LS, E.buf.git_signs_count, 0);
+    for (int i = 0; i < E.buf.git_signs_count; i++) {
+        char s[2] = { E.buf.git_signs[i], '\0' };
+        lua_pushstring(LS, s);
+        lua_rawseti(LS, -2, i + 1);
+    }
+    return 1;
+}
+
+static int l_git_log(lua_State *LS) {
+    int limit = 50;
+    if (lua_gettop(LS) >= 1)
+        limit = (int)luaL_checkinteger(LS, 1);
+    if (limit <= 0) limit = 50;
+
+    int count;
+    GitLogEntry *entries = git_log(limit, &count);
+    if (!entries) {
+        lua_pushnil(LS);
+        return 1;
+    }
+
+    lua_createtable(LS, count, 0);
+    for (int i = 0; i < count; i++) {
+        lua_newtable(LS);
+
+        lua_pushstring(LS, entries[i].hash);
+        lua_setfield(LS, -2, "hash");
+
+        lua_pushstring(LS, entries[i].date);
+        lua_setfield(LS, -2, "date");
+
+        lua_pushstring(LS, entries[i].author);
+        lua_setfield(LS, -2, "author");
+
+        lua_pushstring(LS, entries[i].subject);
+        lua_setfield(LS, -2, "subject");
+
+        lua_rawseti(LS, -2, i + 1);
+    }
+
+    free(entries);
+    return 1;
+}
+
+static int l_git_blame(lua_State *LS) {
+    if (!E.buf.filename) {
+        lua_pushnil(LS);
+        return 1;
+    }
+
+    int count;
+    char **lines = git_blame(E.buf.filename, &count);
+    if (!lines || count <= 0) {
+        lua_pushnil(LS);
+        return 1;
+    }
+
+    lua_createtable(LS, count, 0);
+    for (int i = 0; i < count; i++) {
+        lua_pushstring(LS, lines[i]);
+        lua_rawseti(LS, -2, i + 1);
+        free(lines[i]);
+    }
+    free(lines);
+    return 1;
+}
+
 static const luaL_Reg qe_lib[] = {
     {"set_option",   l_set_option},
     {"print",        l_print},
@@ -563,6 +675,12 @@ static const luaL_Reg qe_lib[] = {
     {"get_selection", l_get_selection},
     {"get_register",  l_get_register},
     {"set_register",  l_set_register},
+    /* Tier 3: Git queries */
+    {"git_branch",     l_git_branch},
+    {"git_status",     l_git_status},
+    {"git_diff_signs", l_git_diff_signs},
+    {"git_log",        l_git_log},
+    {"git_blame",      l_git_blame},
     {NULL,           NULL}
 };
 
