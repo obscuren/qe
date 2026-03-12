@@ -37,14 +37,16 @@ qe                  # open empty buffer
 qe file.c           # open a file
 qe +42 file.c       # open file at line 42
 qe -R file.c        # open file read-only
+qe -s Session.qe    # restore a saved session
 qe src/             # open directory tree
+qe --help           # show usage information
 ```
 
 ### CLI subcommands
 
 ```bash
 qe cat file.c       # syntax-highlighted cat
-qe diff file.c      # colored git diff vs HEAD
+qe diff file.c      # open file in editor with Gdiff view
 qe blame file.c     # colored git blame
 qe log              # colored git log (default 50 entries)
 qe log --limit 20   # limit number of entries
@@ -178,6 +180,8 @@ A count before `.` (e.g. `5.`) overrides the stored count.
 ### Undo tree
 
 Undo history forms a tree rather than a linear stack. After undoing and making a new edit, the old redo branch is preserved — nothing is ever lost. `u` and `Ctrl-R` navigate the tree branch by branch, while `g-`/`g+` traverse all states chronologically (crossing branches). The tree is capped at 200 nodes; oldest unused leaves are pruned automatically.
+
+**Persistent undo:** Undo history is saved to disk (under `.qe/undo/`) and survives file close and editor restart. History is written on save and buffer switch, and restored on file open.
 
 #### Local revisions browser
 
@@ -578,12 +582,37 @@ Line numbers are tinted to match. Navigation with `j`/`k`/`g`/`G`, close with `q
 
 ### `:Gcommit`
 
-Opens a commit message buffer for staged changes. The staged diff summary is shown as dimmed comment lines (prefixed with `#`). Write your message, then:
+Opens an interactive commit buffer in a split pane above the current buffer. Both unstaged and staged files are listed, and you can stage/unstage files directly from within the buffer.
 
-| Command | Action                     |
-|---------|----------------------------|
-| `:wq`   | Commit with the message    |
-| `:q`    | Abort the commit           |
+```
+Fix buffer overflow in editor resize
+
+# Gcommit: +/- stage/unstage, u/Ctrl-r undo/redo, :wq commit, :q abort
+
+# Unstaged changes
+
+- src/editor.c
+
+# Staged changes
+
++ src/main.c
++ include/editor.h
+```
+
+Write your commit message on the lines above the first `#` comment. Lines starting with `#`, `- `, or `+ ` are excluded from the message.
+
+| Key       | Action                                          |
+|-----------|-------------------------------------------------|
+| `+`       | Stage file under cursor (moves `- ` → `+ `)    |
+| `-`       | Unstage file under cursor (moves `+ ` → `- `)  |
+| `V` + `+` | Stage all selected files (visual line mode)    |
+| `V` + `-` | Unstage all selected files (visual line mode)  |
+| `u`       | Undo last stage/unstage action                  |
+| `Ctrl-R`  | Redo last undone stage/unstage action            |
+| `:wq`     | Commit with the message                         |
+| `:q`      | Abort the commit                                |
+
+Staged files are shown in green, unstaged files in red. The buffer can be opened even with no staged changes — stage files interactively with `+` before committing.
 
 ---
 
@@ -673,6 +702,32 @@ Folds are indent-based: `zc` on a line hides all subsequent lines with strictly 
 | `:source [file]`      | Restore session from file                    |
 
 A session file records the working directory, all open buffers (with cursor positions), and the active buffer. Special buffers (tree, terminal, quickfix, etc.) are excluded.
+
+Sessions can also be restored from the command line:
+
+```bash
+qe -s Session.qe
+```
+
+---
+
+## Crash Recovery
+
+Quick Ed periodically writes recovery snapshots of unsaved buffers to `.qe/recovery/`. If the editor crashes or is killed, unsaved work can be restored on the next open.
+
+When opening a file that has a recovery file newer than the file on disk, you are prompted:
+
+```
+Recovery file found (newer than file). [I]gnore  [R]ecover  [D]elete
+```
+
+| Key | Action                                            |
+|-----|---------------------------------------------------|
+| `i` | Ignore the recovery file and open the file as-is |
+| `r` | Recover — load the saved snapshot                |
+| `d` | Delete the recovery file and open normally        |
+
+Recovery files are removed automatically when a buffer is saved normally.
 
 ---
 
