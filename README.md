@@ -709,6 +709,18 @@ Sessions can also be restored from the command line:
 qe -s Session.qe
 ```
 
+## Lua Command
+
+| Command        | Action                          |
+|----------------|---------------------------------|
+| `:lua <code>`  | Execute Lua code inline         |
+
+```
+:lua qe.print("hello")
+:lua qe.print(qe.line_count())
+:lua r, c = qe.get_cursor(); qe.print(r..":"..c)
+```
+
 ---
 
 ## Crash Recovery
@@ -784,6 +796,36 @@ Display a message in the command bar.
 
 ```lua
 qe.print("Hello from Lua!")
+```
+
+### Buffer & Cursor API
+
+| Function | Returns | Description |
+|---|---|---|
+| `qe.get_cursor()` | `row, col` | Current cursor position (0-based) |
+| `qe.set_cursor(row, col)` | — | Move cursor (clamps to valid range) |
+| `qe.get_line([row])` | `string` | Line text (defaults to cursor row) |
+| `qe.set_line(row, text)` | — | Replace a line's content (undoable) |
+| `qe.insert_line(row, text)` | — | Insert new line at position (undoable) |
+| `qe.delete_line(row)` | — | Remove a line (undoable) |
+| `qe.line_count()` | `int` | Number of lines in buffer |
+| `qe.get_filename()` | `string` or `nil` | Current file path |
+| `qe.is_dirty()` | `bool` | Whether buffer has unsaved changes |
+| `qe.get_mode()` | `string` | Current mode (`"normal"`, `"insert"`, `"command"`, `"search"`, `"visual"`, `"visual_line"`, `"visual_block"`) |
+
+All mutating operations (`set_line`, `insert_line`, `delete_line`) push an undo snapshot before the edit, so `u` reverts them.
+
+```lua
+-- Insert a header comment on the current file
+qe.insert_line(0, "// " .. (qe.get_filename() or "untitled"))
+
+-- Print cursor position
+local r, c = qe.get_cursor()
+qe.print(r .. ":" .. c)
+
+-- Replace current line
+local row = qe.get_cursor()
+qe.set_line(row, "-- replaced from Lua")
 ```
 
 ### `qe.add_syntax(def)`

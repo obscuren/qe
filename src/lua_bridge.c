@@ -230,6 +230,119 @@ static int l_add_command(lua_State *LS) {
     return 0;
 }
 
+/* ── Tier 1: Buffer & cursor API ─────────────────────────────────────── */
+
+static void lua_push_undo(const char *desc) {
+    if (!E.undo_tree.root)
+        undo_tree_set_root(&E.undo_tree, editor_capture_state(), "initial");
+    else
+        undo_tree_push(&E.undo_tree, editor_capture_state(), desc);
+}
+
+static int l_get_cursor(lua_State *LS) {
+    lua_pushinteger(LS, E.cy);
+    lua_pushinteger(LS, E.cx);
+    return 2;
+}
+
+static int l_set_cursor(lua_State *LS) {
+    int row = (int)luaL_checkinteger(LS, 1);
+    int col = (int)luaL_checkinteger(LS, 2);
+    if (E.buf.numrows == 0) return 0;
+    if (row < 0) row = 0;
+    if (row >= E.buf.numrows) row = E.buf.numrows - 1;
+    if (col < 0) col = 0;
+    int maxcol = E.buf.rows[row].len > 0 ? E.buf.rows[row].len - 1 : 0;
+    if (col > maxcol) col = maxcol;
+    E.cy = row;
+    E.cx = col;
+    return 0;
+}
+
+static int l_get_line(lua_State *LS) {
+    int row;
+    if (lua_gettop(LS) >= 1)
+        row = (int)luaL_checkinteger(LS, 1);
+    else
+        row = E.cy;
+    if (row < 0 || row >= E.buf.numrows)
+        return luaL_error(LS, "row %d out of range [0, %d)", row, E.buf.numrows);
+    lua_pushlstring(LS, E.buf.rows[row].chars, E.buf.rows[row].len);
+    return 1;
+}
+
+static int l_set_line(lua_State *LS) {
+    int row = (int)luaL_checkinteger(LS, 1);
+    size_t len;
+    const char *text = luaL_checklstring(LS, 2, &len);
+    if (row < 0 || row >= E.buf.numrows)
+        return luaL_error(LS, "row %d out of range [0, %d)", row, E.buf.numrows);
+    lua_push_undo("lua set_line");
+    buf_delete_row(&E.buf, row);
+    buf_insert_row(&E.buf, row, text, (int)len);
+    E.buf.dirty++;
+    return 0;
+}
+
+static int l_insert_line(lua_State *LS) {
+    int row = (int)luaL_checkinteger(LS, 1);
+    size_t len;
+    const char *text = luaL_checklstring(LS, 2, &len);
+    if (row < 0 || row > E.buf.numrows)
+        return luaL_error(LS, "row %d out of range [0, %d]", row, E.buf.numrows);
+    lua_push_undo("lua insert_line");
+    buf_insert_row(&E.buf, row, text, (int)len);
+    E.buf.dirty++;
+    return 0;
+}
+
+static int l_delete_line(lua_State *LS) {
+    int row = (int)luaL_checkinteger(LS, 1);
+    if (row < 0 || row >= E.buf.numrows)
+        return luaL_error(LS, "row %d out of range [0, %d)", row, E.buf.numrows);
+    lua_push_undo("lua delete_line");
+    buf_delete_row(&E.buf, row);
+    E.buf.dirty++;
+    if (E.cy >= E.buf.numrows && E.buf.numrows > 0)
+        E.cy = E.buf.numrows - 1;
+    return 0;
+}
+
+static int l_line_count(lua_State *LS) {
+    lua_pushinteger(LS, E.buf.numrows);
+    return 1;
+}
+
+static int l_get_filename(lua_State *LS) {
+    if (E.buf.filename)
+        lua_pushstring(LS, E.buf.filename);
+    else
+        lua_pushnil(LS);
+    return 1;
+}
+
+static int l_is_dirty(lua_State *LS) {
+    lua_pushboolean(LS, E.buf.dirty != 0);
+    return 1;
+}
+
+static int l_get_mode(lua_State *LS) {
+    const char *s;
+    switch (E.mode) {
+    case MODE_NORMAL:       s = "normal";       break;
+    case MODE_INSERT:       s = "insert";       break;
+    case MODE_COMMAND:      s = "command";       break;
+    case MODE_SEARCH:       s = "search";        break;
+    case MODE_VISUAL:       s = "visual";        break;
+    case MODE_VISUAL_LINE:  s = "visual_line";   break;
+    case MODE_VISUAL_BLOCK: s = "visual_block";  break;
+    case MODE_FUZZY:        s = "fuzzy";         break;
+    default:                s = "unknown";       break;
+    }
+    lua_pushstring(LS, s);
+    return 1;
+}
+
 static const luaL_Reg qe_lib[] = {
     {"set_option",   l_set_option},
     {"print",        l_print},
@@ -237,6 +350,17 @@ static const luaL_Reg qe_lib[] = {
     {"command",      l_command},
     {"add_syntax",   l_add_syntax},
     {"add_command",  l_add_command},
+    /* Tier 1: Buffer & cursor */
+    {"get_cursor",   l_get_cursor},
+    {"set_cursor",   l_set_cursor},
+    {"get_line",     l_get_line},
+    {"set_line",     l_set_line},
+    {"insert_line",  l_insert_line},
+    {"delete_line",  l_delete_line},
+    {"line_count",   l_line_count},
+    {"get_filename", l_get_filename},
+    {"is_dirty",     l_is_dirty},
+    {"get_mode",     l_get_mode},
     {NULL,           NULL}
 };
 
@@ -305,6 +429,17 @@ void lua_bridge_init(void) {
     atexit(close_lua);
 
     load_config();
+}
+
+void lua_bridge_exec(const char *code) {
+    if (!L) return;
+    if (luaL_dostring(L, code) != LUA_OK) {
+        const char *err = lua_tostring(L, -1);
+        snprintf(E.statusmsg, sizeof(E.statusmsg), "lua: %.110s",
+                 err ? err : "error");
+        E.statusmsg_is_error = 1;
+        lua_pop(L, 1);
+    }
 }
 
 int lua_bridge_cli(const char *name, int argc, char **argv) {
