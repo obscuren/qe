@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Quick Ed — A fast terminal text editor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -23,7 +26,7 @@
 
 <!-- ── Hero ────────────────────────────────────────────────────────── -->
 <section class="hero">
-    <h1>Quick Ed</h1>
+    <h1><span class="accent">Quick Ed</span></h1>
     <p class="tagline">A fast, lightweight terminal editor with modal editing and built-in git.</p>
     <p class="research-note">This is a research project — built entirely through prompting using <a href="https://claude.ai">Claude AI</a>.</p>
     <div class="terminal-window">
@@ -91,79 +94,79 @@
 
     <div class="feature-grid">
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">vi</div>
             <h3>Modal Editing</h3>
             <p>Vim-style modes — Normal, Insert, Visual, Command, Search. Operators (<code>d</code>, <code>y</code>, <code>c</code>) combine with motions and text objects. Count prefixes, dot repeat, macros, and named registers.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&lt;/&gt;</div>
             <h3>Syntax Highlighting</h3>
             <p>Tokenizer-based highlighting for keywords, types, strings, numbers, and comments. Bracket match highlighting. Language definitions are added via Lua — ships with C, Lua, and Markdown.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">[][]</div>
             <h3>Split Panes</h3>
             <p>Horizontal and vertical splits with <code>:split</code> and <code>:vsplit</code>. Navigate with <code>Ctrl-W</code> keys. Each pane has independent cursor and scroll state. Two panes can show the same buffer.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&#128193;</div>
             <h3>File Tree</h3>
             <p>Directory sidebar with <code>&lt;leader&gt;e</code> or <code>:Tree</code>. Git status coloring — green for new, yellow for modified, red for deleted. Toggle hidden files, expand/collapse directories.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&#128269;</div>
             <h3>Fuzzy Finder</h3>
             <p>Fast subsequence file search with <code>&lt;leader&gt;t</code>. Matched characters highlighted. Open in current pane, horizontal split, or vertical split. Hidden directories auto-excluded.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&#9095;</div>
             <h3>Embedded Terminal</h3>
             <p>Open a shell or run commands with <code>:terminal</code>. Full 256-color support, cursor positioning, scroll regions. PTY auto-resizes with the pane. Auto-closes on shell exit.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">git</div>
             <h3>Git Integration</h3>
             <p>Gutter diff signs, hunk navigation (<code>]c</code>/<code>[c</code>), hunk stage/revert. Blame, diff, log, and commit views. Stage files, stash changes, and create commits without leaving the editor.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">{..}</div>
             <h3>Code Folding</h3>
             <p>Indent-based folding with <code>za</code>/<code>zc</code>/<code>zo</code>/<code>zM</code>/<code>zR</code>. Fold headers show hidden line count. Cursor movement skips folded regions. Scrolling accounts for hidden lines.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&#9998;</div>
             <h3>Grep &amp; Quickfix</h3>
             <p>Search across files with <code>:grep</code>. Results open in a quickfix pane — navigate with <code>j</code>/<code>k</code>, jump to match with <code>Enter</code>. Navigate between results with <code>:cn</code>/<code>:cp</code>.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">lua</div>
             <h3>Lua Config</h3>
             <p>Full Lua scripting via <code>~/.config/qe/init.lua</code>. Set options, bind keys, add syntax definitions, register CLI subcommands. Lua bindings override built-in keys.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&#9000;</div>
             <h3>CLI Tools</h3>
             <p>Use <code>qe</code> as a command-line tool: <code>qe cat</code>, <code>qe diff</code>, <code>qe blame</code>, <code>qe log</code>, <code>qe grep</code> — all with syntax-colored output. Add custom subcommands via Lua.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&#9740;</div>
             <h3>Undo Tree</h3>
             <p>Full branching undo history — never lose a change. Browse the tree visually with <code>:revisions</code>. Time-travel with <code>g-</code>/<code>g+</code> to reach states that linear undo/redo can't.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="feature-card fade-up">
             <div class="feature-icon">&#9736;</div>
             <h3>Session &amp; State</h3>
             <p>Save and restore sessions with <code>:mksession</code> and <code>:source</code>. Jump list (<code>Ctrl-O</code>/<code>Ctrl-I</code>) and marks (<code>ma</code>, <code>'a</code>) persist across the editing session. Pick up where you left off.</p>
@@ -231,7 +234,11 @@ sudo cmake --install build    <span class="comment"># installs to /usr/local/bin
                 <tr><td><code>0</code> / <code>$</code></td><td>Start / end of line</td></tr>
                 <tr><td><code>gg</code> / <code>G</code></td><td>First / last line</td></tr>
                 <tr><td><code>f</code><em>c</em> / <code>F</code><em>c</em></td><td>Find char forward / back</td></tr>
+                <tr><td><code>t</code><em>c</em> / <code>T</code><em>c</em></td><td>Till char forward / back</td></tr>
+                <tr><td><code>;</code> / <code>,</code></td><td>Repeat last find / reverse</td></tr>
+                <tr><td><code>{</code> / <code>}</code></td><td>Paragraph up / down</td></tr>
                 <tr><td><code>%</code></td><td>Matching bracket</td></tr>
+                <tr><td><code>ma</code> / <code>'a</code></td><td>Set mark / jump to mark</td></tr>
                 <tr><td><code>Ctrl-O</code> / <code>Ctrl-I</code></td><td>Jump list back / forward</td></tr>
             </table>
         </div>
@@ -272,6 +279,11 @@ sudo cmake --install build    <span class="comment"># installs to /usr/local/bin
                 <tr><td><code>:grep pattern</code></td><td>Search across files</td></tr>
                 <tr><td><code>:Gblame</code> / <code>:Gdiff</code></td><td>Git blame / diff</td></tr>
                 <tr><td><code>:Glog</code> / <code>:Gcommit</code></td><td>Git log / commit</td></tr>
+                <tr><td><code>:</code><em>N</em></td><td>Jump to line N</td></tr>
+                <tr><td><code>:bn</code> / <code>:bp</code> / <code>:b N</code></td><td>Next / prev / Nth buffer</td></tr>
+                <tr><td><code>:revisions</code></td><td>Browse undo tree</td></tr>
+                <tr><td><code>:mksession</code> / <code>:source</code></td><td>Save / restore session</td></tr>
+                <tr><td><code>:set nu</code> / <code>:set nonu</code></td><td>Show / hide line numbers</td></tr>
             </table>
         </div>
 
@@ -326,6 +338,24 @@ function copyInstall() {
         btn.querySelector('.check-icon').style.display = 'none';
     }, 2000);
 }
+
+/* Scroll-triggered fade-in for feature cards */
+var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+            var cards = document.querySelectorAll('.fade-up');
+            var idx = Array.prototype.indexOf.call(cards, entry.target);
+            var row = idx % 3;
+            entry.target.style.transitionDelay = (row * 0.08) + 's';
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+        }
+    });
+}, { threshold: 0.15 });
+
+document.querySelectorAll('.fade-up').forEach(function(el) {
+    observer.observe(el);
+});
 </script>
 </body>
 </html>
