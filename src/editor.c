@@ -5,6 +5,7 @@
 #include "lang.h"
 #include "terminal.h"
 #include "term_emu.h"
+#include "undofile.h"
 #include "utils.h"
 
 #include <limits.h>
@@ -185,6 +186,10 @@ void editor_buf_save(int i) {
     t->undo_tree = E.undo_tree;
     undo_tree_init(&E.undo_tree);
 
+    /* Persist undo history to disk when parking a buffer. */
+    if (t->buf.filename && t->kind == BT_NORMAL)
+        undofile_save(t->buf.filename, &t->undo_tree);
+
     t->pre_insert_snapshot = E.pre_insert_snapshot;
     t->pre_insert_dirty    = E.pre_insert_dirty;
     t->has_pre_insert      = E.has_pre_insert;   /* always 0 at this point */
@@ -204,6 +209,11 @@ void editor_buf_restore(int i) {
 
     E.undo_tree = t->undo_tree;
     undo_tree_init(&t->undo_tree);
+
+    /* If the undo tree is empty (e.g. fresh session restore), try loading
+       persisted undo history from disk. */
+    if (!E.undo_tree.root && E.buf.filename)
+        undofile_load(E.buf.filename, &E.undo_tree);
 
     E.pre_insert_snapshot = t->pre_insert_snapshot;
     E.pre_insert_dirty    = t->pre_insert_dirty;
@@ -234,6 +244,9 @@ void editor_open_file_arg(const char *file_arg) {
     } else {
         buf_open(&E.buf, file_arg);
         editor_detect_syntax();
+        UndoTree loaded = {0};
+        if (undofile_load(file_arg, &loaded) == 0)
+            E.undo_tree = loaded;
     }
 }
 
