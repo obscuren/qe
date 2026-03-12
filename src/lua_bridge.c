@@ -343,6 +343,200 @@ static int l_get_mode(lua_State *LS) {
     return 1;
 }
 
+/* ── Tier 2: File & buffer management ────────────────────────────────── */
+
+static int l_open(lua_State *LS) {
+    const char *fname = luaL_checkstring(LS, 1);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "e %s", fname);
+    int len = (int)strlen(cmd);
+    if (len >= (int)sizeof(E.cmdbuf)) len = (int)sizeof(E.cmdbuf) - 1;
+    memcpy(E.cmdbuf, cmd, len);
+    E.cmdbuf[len] = '\0';
+    E.cmdlen = len;
+    editor_execute_command();
+    return 0;
+}
+
+static int l_save(lua_State *LS) {
+    char cmd[512];
+    if (lua_gettop(LS) >= 1) {
+        const char *fname = luaL_checkstring(LS, 1);
+        snprintf(cmd, sizeof(cmd), "w %s", fname);
+    } else {
+        snprintf(cmd, sizeof(cmd), "w");
+    }
+    int len = (int)strlen(cmd);
+    if (len >= (int)sizeof(E.cmdbuf)) len = (int)sizeof(E.cmdbuf) - 1;
+    memcpy(E.cmdbuf, cmd, len);
+    E.cmdbuf[len] = '\0';
+    E.cmdlen = len;
+    editor_execute_command();
+    return 0;
+}
+
+static int l_buffers(lua_State *LS) {
+    lua_newtable(LS);
+    for (int i = 0; i < E.num_buftabs; i++) {
+        lua_newtable(LS);
+
+        lua_pushinteger(LS, i);
+        lua_setfield(LS, -2, "index");
+
+        const char *fn;
+        int dirty;
+        if (i == E.cur_buftab) {
+            fn    = E.buf.filename;
+            dirty = E.buf.dirty;
+        } else {
+            fn    = E.buftabs[i].buf.filename;
+            dirty = E.buftabs[i].buf.dirty;
+        }
+        if (fn) lua_pushstring(LS, fn);
+        else    lua_pushnil(LS);
+        lua_setfield(LS, -2, "filename");
+
+        lua_pushboolean(LS, dirty != 0);
+        lua_setfield(LS, -2, "dirty");
+
+        lua_pushboolean(LS, i == E.cur_buftab);
+        lua_setfield(LS, -2, "active");
+
+        lua_rawseti(LS, -2, i + 1);
+    }
+    return 1;
+}
+
+static int l_switch_buf(lua_State *LS) {
+    int idx = (int)luaL_checkinteger(LS, 1);
+    if (idx < 0 || idx >= E.num_buftabs)
+        return luaL_error(LS, "buffer index %d out of range [0, %d)", idx, E.num_buftabs);
+    if (idx == E.cur_buftab) return 0;
+    switch_to_buf(idx);
+    return 0;
+}
+
+static int l_get_selection(lua_State *LS) {
+    if (E.mode != MODE_VISUAL && E.mode != MODE_VISUAL_LINE
+        && E.mode != MODE_VISUAL_BLOCK) {
+        lua_pushnil(LS);
+        return 1;
+    }
+
+    int ar = E.visual_anchor_row, ac = E.visual_anchor_col;
+    int cr = E.cy,                cc = E.cx;
+    int r0, c0, r1, c1;
+    if (ar < cr || (ar == cr && ac <= cc)) {
+        r0 = ar; c0 = ac; r1 = cr; c1 = cc;
+    } else {
+        r0 = cr; c0 = cc; r1 = ar; c1 = ac;
+    }
+
+    luaL_Buffer lb;
+    luaL_buffinit(LS, &lb);
+
+    if (E.mode == MODE_VISUAL_LINE) {
+        for (int r = r0; r <= r1; r++) {
+            if (r > r0) luaL_addchar(&lb, '\n');
+            luaL_addlstring(&lb, E.buf.rows[r].chars, E.buf.rows[r].len);
+        }
+    } else if (E.mode == MODE_VISUAL_BLOCK) {
+        int lc = ac < cc ? ac : cc;
+        int rc = ac > cc ? ac : cc;
+        for (int r = r0; r <= r1; r++) {
+            if (r > r0) luaL_addchar(&lb, '\n');
+            int len = E.buf.rows[r].len;
+            int s = lc < len ? lc : len;
+            int e = (rc + 1) < len ? (rc + 1) : len;
+            if (e > s) luaL_addlstring(&lb, E.buf.rows[r].chars + s, e - s);
+        }
+    } else {
+        for (int r = r0; r <= r1; r++) {
+            if (r > r0) luaL_addchar(&lb, '\n');
+            int len = E.buf.rows[r].len;
+            int s = (r == r0) ? c0 : 0;
+            int e = (r == r1) ? (c1 + 1 < len ? c1 + 1 : len) : len;
+            if (s > len) s = len;
+            if (e > len) e = len;
+            if (e > s) luaL_addlstring(&lb, E.buf.rows[r].chars + s, e - s);
+        }
+    }
+
+    luaL_pushresult(&lb);
+    return 1;
+}
+
+static int reg_name_to_index(lua_State *LS, const char *name) {
+    if (name[0] == '+' && name[1] == '\0') return REG_CLIPBOARD;
+    if (name[0] >= 'a' && name[0] <= 'z' && name[1] == '\0')
+        return name[0] - 'a' + 1;
+    if (name[0] == '"' && name[1] == '\0') return 0;
+    return luaL_error(LS, "invalid register name: %s (use a-z, +, or \")", name);
+}
+
+static int l_get_register(lua_State *LS) {
+    const char *name = luaL_checkstring(LS, 1);
+    int ri = reg_name_to_index(LS, name);
+    if (ri == REG_CLIPBOARD) clipboard_paste(ri);
+    if (!E.regs[ri].rows || E.regs[ri].numrows == 0) {
+        lua_pushnil(LS);
+        return 1;
+    }
+    luaL_Buffer lb;
+    luaL_buffinit(LS, &lb);
+    for (int i = 0; i < E.regs[ri].numrows; i++) {
+        if (i > 0) luaL_addchar(&lb, '\n');
+        luaL_addstring(&lb, E.regs[ri].rows[i]);
+    }
+    luaL_pushresult(&lb);
+    return 1;
+}
+
+static int l_set_register(lua_State *LS) {
+    const char *name = luaL_checkstring(LS, 1);
+    size_t tlen;
+    const char *text = luaL_checklstring(LS, 2, &tlen);
+    int ri = reg_name_to_index(LS, name);
+
+    /* Free existing register contents */
+    for (int i = 0; i < E.regs[ri].numrows; i++) free(E.regs[ri].rows[i]);
+    free(E.regs[ri].rows);
+
+    /* Split text on newlines */
+    int nrows = 1;
+    for (size_t i = 0; i < tlen; i++)
+        if (text[i] == '\n') nrows++;
+    char **rows = malloc(sizeof(char *) * nrows);
+    const char *p = text;
+    for (int i = 0; i < nrows; i++) {
+        const char *nl = memchr(p, '\n', tlen - (p - text));
+        int len = nl ? (int)(nl - p) : (int)(tlen - (p - text));
+        rows[i] = malloc(len + 1);
+        memcpy(rows[i], p, len);
+        rows[i][len] = '\0';
+        p = nl ? nl + 1 : p + len;
+    }
+    E.regs[ri].rows     = rows;
+    E.regs[ri].numrows  = nrows;
+    E.regs[ri].linewise = 0;
+
+    /* Mirror to unnamed register */
+    if (ri != 0) {
+        for (int i = 0; i < E.regs[0].numrows; i++) free(E.regs[0].rows[i]);
+        free(E.regs[0].rows);
+        E.regs[0].numrows  = nrows;
+        E.regs[0].linewise = 0;
+        E.regs[0].rows     = malloc(sizeof(char *) * nrows);
+        for (int i = 0; i < nrows; i++)
+            E.regs[0].rows[i] = strdup(rows[i]);
+    }
+
+    /* Sync to system clipboard if writing to clipboard register */
+    if (ri == REG_CLIPBOARD) clipboard_copy(ri);
+
+    return 0;
+}
+
 static const luaL_Reg qe_lib[] = {
     {"set_option",   l_set_option},
     {"print",        l_print},
@@ -361,6 +555,14 @@ static const luaL_Reg qe_lib[] = {
     {"get_filename", l_get_filename},
     {"is_dirty",     l_is_dirty},
     {"get_mode",     l_get_mode},
+    /* Tier 2: File & buffer management */
+    {"open",          l_open},
+    {"save",          l_save},
+    {"buffers",       l_buffers},
+    {"switch_buf",    l_switch_buf},
+    {"get_selection", l_get_selection},
+    {"get_register",  l_get_register},
+    {"set_register",  l_set_register},
     {NULL,           NULL}
 };
 

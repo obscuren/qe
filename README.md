@@ -828,6 +828,35 @@ local row = qe.get_cursor()
 qe.set_line(row, "-- replaced from Lua")
 ```
 
+### File & Buffer Management
+
+| Function | Returns | Description |
+|---|---|---|
+| `qe.open(filename)` | — | Open a file (equivalent to `:e filename`) |
+| `qe.save([filename])` | — | Save current buffer, optional save-as |
+| `qe.buffers()` | table | List all buffers: `{index, filename, dirty, active}` |
+| `qe.switch_buf(index)` | — | Switch to buffer by 0-based index |
+| `qe.get_selection()` | `string` or `nil` | Selected text in visual mode |
+| `qe.get_register(name)` | `string` or `nil` | Read register (`"a"`-`"z"`, `"+"`, `"\""`) |
+| `qe.set_register(name, text)` | — | Write to register (mirrors to unnamed) |
+
+```lua
+-- Save all dirty buffers
+for _, b in ipairs(qe.buffers()) do
+    if b.dirty then
+        qe.switch_buf(b.index)
+        qe.save()
+    end
+end
+
+-- Copy selection to register 'a'
+local sel = qe.get_selection()
+if sel then qe.set_register("a", sel) end
+
+-- Read from clipboard register
+local clip = qe.get_register("+")
+```
+
 ### `qe.add_syntax(def)`
 
 Register a syntax definition for one or more file types. The highlighting engine is built into the editor; this call supplies the language-specific rules.
