@@ -280,10 +280,12 @@ static void render_row_content(AppendBuf *ab, const Row *row,
     if (cursor_col >= 0 && cursor_col < row->len)
         fhl[cursor_col] = row->hl ? row->hl[cursor_col] : HL_NORMAL;
 
-    /* Row background: diff tint or cursorline. */
+    /* Row background: diff tint, cursorline, or theme bg. */
     const char *bg_esc = diff_bg_escape(diff_bg);
     if (!bg_esc && cursorline)
         bg_esc = theme_cursorline_bg();
+    if (!bg_esc)
+        bg_esc = theme_bg();
     int bg_esc_len = bg_esc ? (int)strlen(bg_esc) : 0;
 
     /* Render char by char, expanding tabs, clipped to the vcol viewport. */
