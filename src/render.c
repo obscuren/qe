@@ -284,8 +284,6 @@ static void render_row_content(AppendBuf *ab, const Row *row,
     const char *bg_esc = diff_bg_escape(diff_bg);
     if (!bg_esc && cursorline)
         bg_esc = theme_cursorline_bg();
-    if (!bg_esc && theme_bg())
-        bg_esc = theme_bg();
     int bg_esc_len = bg_esc ? (int)strlen(bg_esc) : 0;
 
     /* Render char by char, expanding tabs, clipped to the vcol viewport. */
@@ -502,9 +500,14 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         int is_cursorline = 0;
         if (!row_bg && E.opts.cursorline && !no_gutter
             && filerow == pcy && filerow < buf->numrows) {
-            row_bg = "\x1b[48;5;236m";
+            row_bg = theme_cursorline_bg();
             is_cursorline = 1;
         }
+
+        /* Theme background: apply to every row so the entire editor area
+           is filled with the theme's background color. */
+        if (!row_bg && theme_bg())
+            row_bg = theme_bg();
 
         if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
 
@@ -809,7 +812,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 }
             }
         } else if (filerow >= buf->numrows) {
-            if (row_bg) ab_append(ab, SGR_RESET, 3);
+            /* Reset diff/cursorline bg, but keep theme bg for empty rows. */
+            if (row_bg && !theme_bg()) ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "~", 1);
         } else {
             /* Gutter */
@@ -1546,6 +1550,7 @@ void editor_refresh_screen(void) {
     ab_append(&ab, "\x1b[?2026h", 8); /* begin synchronized update */
     ab_append(&ab, "\x1b[?25l",   6); /* hide cursor */
     ab_append(&ab, SGR_RESET,     3); /* reset attributes before clear */
+    if (theme_bg()) ab_append(&ab, theme_bg(), (int)strlen(theme_bg()));
     ab_append(&ab, "\x1b[H",      3); /* cursor to home      */
     ab_append(&ab, "\x1b[J",      3); /* erase to end of screen (no scrollback push on macOS) */
 
