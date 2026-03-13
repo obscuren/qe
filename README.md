@@ -676,9 +676,44 @@ Type `/` in Normal mode, then enter a pattern and press `Enter`. The cursor jump
 
 ## Syntax Highlighting
 
-Quick Ed highlights keywords, types, strings, numbers, and comments. Language definitions live in `~/.config/qe/languages/` and are loaded by `init.lua`. Supported out of the box: **C/C++**, **Lua**, **Markdown**.
+Quick Ed highlights keywords, types, strings, numbers, comments, preprocessor directives, escape sequences, and rainbow brackets. Language definitions live in `~/.config/qe/languages/` and are loaded by `init.lua`. Supported out of the box: **C/C++**, **Lua**, **Markdown**.
 
 When the cursor is on a bracket (`(`, `)`, `[`, `]`, `{`, `}`), the matching counterpart is highlighted with a bright blue background and white text. The match search crosses line boundaries.
+
+Nested brackets are colored with rainbow colors (yellow, magenta, cyan, blue) cycling by depth.
+
+## Themes
+
+Colors are controlled by the theme system. The **default** theme is always available. Custom themes can be defined in Lua and loaded from `~/.config/qe/themes/`:
+
+```lua
+-- ~/.config/qe/init.lua
+dofile(os.getenv("HOME") .. "/.config/qe/themes/monokai.lua")
+qe.set_theme("monokai")
+```
+
+A **Monokai** theme ships in the `themes/` directory. To use it, copy `themes/monokai.lua` to `~/.config/qe/themes/` and add the lines above to your `init.lua`.
+
+### Creating custom themes
+
+Use `qe.add_theme()` with a table containing `name`, `colors` (keyed by highlight type), and optional UI fields (`bg`, `fg`, `statusbar_active`, `statusbar_inactive`, `cursorline_bg`):
+
+```lua
+qe.add_theme({
+    name = "mytheme",
+    colors = {
+        comment  = "\x1b[38;2;100;100;100m",
+        keyword  = "\x1b[1;31m",
+        -- ... other highlight types: normal, type, string, number,
+        -- escape, preproc, bracket1-4, search, bracket_match, visual
+    },
+    bg = "\x1b[48;2;30;30;30m",
+    statusbar_active = "\x1b[7m",
+})
+qe.set_theme("mytheme")
+```
+
+Color values are ANSI escape sequences. Use 24-bit true-color (`\x1b[38;2;R;G;Bm`) for best results.
 
 ## Code Folding
 
