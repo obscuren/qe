@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "git.h"
 #include "syntax.h"
+#include "theme.h"
 #include "buf.h"
 
 #include <stdio.h>
@@ -11,22 +12,7 @@
 
 /* ── Syntax-highlighted cat ──────────────────────────────────────────── */
 
-static const char *hl_ansi(unsigned char hl) {
-    switch ((HlType)hl) {
-        case HL_COMMENT: return "\x1b[2;36m";
-        case HL_KEYWORD: return "\x1b[1;33m";
-        case HL_TYPE:    return "\x1b[36m";
-        case HL_STRING:  return "\x1b[32m";
-        case HL_NUMBER:  return "\x1b[35m";
-        case HL_ESCAPE:  return "\x1b[1;32m";
-        case HL_PREPROC: return "\x1b[1;35m";
-        case HL_BRACKET1: return "\x1b[33m";
-        case HL_BRACKET2: return "\x1b[35m";
-        case HL_BRACKET3: return "\x1b[36m";
-        case HL_BRACKET4: return "\x1b[34m";
-        default:         return NULL;
-    }
-}
+/* Color mapping is now handled by the theme system (theme.h / theme.c). */
 
 static int cmd_cat(int argc, char **argv) {
     if (argc < 3) { fprintf(stderr, "Usage: qe cat <file>\n"); return 1; }
@@ -50,7 +36,7 @@ static int cmd_cat(int argc, char **argv) {
                 unsigned char cur = row->hl[j];
                 if (cur != prev) {
                     if (prev != HL_NORMAL) fputs("\x1b[m", stdout);
-                    const char *esc = hl_ansi(cur);
+                    const char *esc = theme_hl_escape(cur);
                     if (esc) fputs(esc, stdout);
                     prev = cur;
                 }
