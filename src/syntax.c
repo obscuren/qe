@@ -113,14 +113,21 @@ void syntax_update_open_comments(const SyntaxDef *def, Buffer *buf, int from) {
         buf->rows[from].hl_open_comment = prev_end;
     }
 
+    int changed = 0;
     for (int i = from; i < buf->numrows; i++) {
         int state_after = syntax_scan_row(def, &buf->rows[i],
                                            buf->rows[i].hl_open_comment);
         if (i + 1 >= buf->numrows) break;
 
-        /* Early exit: once the next row's state is already correct we're done. */
-        if (i > from && buf->rows[i + 1].hl_open_comment == state_after)
-            break;
+        /* Early exit: once a change has propagated and the next row's
+           state is already correct, the rest is stable.  We must see at
+           least one actual change first — otherwise default-initialised
+           zeros cause a false match on the initial cascade. */
+        if (buf->rows[i + 1].hl_open_comment == state_after) {
+            if (changed) break;
+        } else {
+            changed = 1;
+        }
 
         buf->rows[i + 1].hl_open_comment = state_after;
     }
