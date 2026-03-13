@@ -18,6 +18,12 @@ static const char *hl_ansi(unsigned char hl) {
         case HL_TYPE:    return "\x1b[36m";
         case HL_STRING:  return "\x1b[32m";
         case HL_NUMBER:  return "\x1b[35m";
+        case HL_ESCAPE:  return "\x1b[1;32m";
+        case HL_PREPROC: return "\x1b[1;35m";
+        case HL_BRACKET1: return "\x1b[33m";
+        case HL_BRACKET2: return "\x1b[35m";
+        case HL_BRACKET3: return "\x1b[36m";
+        case HL_BRACKET4: return "\x1b[34m";
         default:         return NULL;
     }
 }

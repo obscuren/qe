@@ -146,6 +146,7 @@ int syntax_highlight_row(const SyntaxDef *def, Row *row, int open_comment) {
     int  in_ml     = open_comment;
     int  in_string = 0;
     char sc        = 0;
+    int  bracket_depth = 0;
 
     int pos = 0;
     while (pos < len) {
@@ -169,7 +170,8 @@ int syntax_highlight_row(const SyntaxDef *def, Row *row, int open_comment) {
         if (in_string) {
             hl[pos] = HL_STRING;
             if (c == '\\' && pos + 1 < len) {
-                hl[pos + 1] = HL_STRING;
+                hl[pos]     = HL_ESCAPE;
+                hl[pos + 1] = HL_ESCAPE;
                 pos += 2;
                 continue;
             }
@@ -191,6 +193,36 @@ int syntax_highlight_row(const SyntaxDef *def, Row *row, int open_comment) {
             in_ml = 1;
             pos  += ml_sl;
             continue;
+        }
+
+        /* ── Preprocessor directive ──────────────────────────────────── */
+        if (c == '#') {
+            /* Only at the start of a line (allow leading whitespace). */
+            int all_ws = 1;
+            for (int k = 0; k < pos; k++) {
+                if (line[k] != ' ' && line[k] != '\t') { all_ws = 0; break; }
+            }
+            if (all_ws) {
+                int start = pos;
+                pos++;  /* skip '#' */
+                while (pos < len && isalpha((unsigned char)line[pos])) pos++;
+                memset(&hl[start], HL_PREPROC, pos - start);
+                /* Also color trailing whitespace as part of directive. */
+                while (pos < len && (line[pos] == ' ' || line[pos] == '\t')) {
+                    hl[pos] = HL_PREPROC; pos++;
+                }
+                /* For #include, highlight the path as HL_STRING. */
+                if (starts_with(line, len, start + 1, "include", 7)) {
+                    if (pos < len && (line[pos] == '"' || line[pos] == '<')) {
+                        char close = (line[pos] == '<') ? '>' : '"';
+                        hl[pos++] = HL_STRING;
+                        while (pos < len && line[pos] != close)
+                            hl[pos++] = HL_STRING;
+                        if (pos < len) hl[pos++] = HL_STRING;
+                    }
+                }
+                continue;
+            }
         }
 
         /* ── String / char literal ───────────────────────────────────── */
@@ -234,6 +266,20 @@ int syntax_highlight_row(const SyntaxDef *def, Row *row, int open_comment) {
                     t = HL_TYPE;
             }
             memset(&hl[start], t, ident_len);
+            continue;
+        }
+
+        /* ── Rainbow brackets ────────────────────────────────────────── */
+        if (c == '(' || c == '[' || c == '{') {
+            hl[pos] = HL_BRACKET1 + (bracket_depth % 4);
+            bracket_depth++;
+            pos++;
+            continue;
+        }
+        if (c == ')' || c == ']' || c == '}') {
+            if (bracket_depth > 0) bracket_depth--;
+            hl[pos] = HL_BRACKET1 + (bracket_depth % 4);
+            pos++;
             continue;
         }
 

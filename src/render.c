@@ -179,6 +179,12 @@ static const char *hl_to_escape(unsigned char hl) {
         case HL_TYPE:    return "\x1b[36m";    /* cyan        */
         case HL_STRING:  return "\x1b[32m";    /* green       */
         case HL_NUMBER:  return "\x1b[35m";    /* magenta     */
+        case HL_ESCAPE:  return "\x1b[1;32m"; /* bold green  */
+        case HL_PREPROC: return "\x1b[1;35m"; /* bold magenta*/
+        case HL_BRACKET1: return "\x1b[33m";  /* yellow      */
+        case HL_BRACKET2: return "\x1b[35m";  /* magenta     */
+        case HL_BRACKET3: return "\x1b[36m";  /* cyan        */
+        case HL_BRACKET4: return "\x1b[34m";  /* blue        */
         case HL_SEARCH:        return SGR_REVERSE;  /* reverse      */
         case HL_BRACKET_MATCH: return "\x1b[104;97m"; /* bright blue bg + white fg */
         case HL_VISUAL:        return "\x1b[44m";     /* blue background           */
