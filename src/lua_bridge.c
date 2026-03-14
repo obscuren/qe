@@ -4,6 +4,7 @@
 #include "git.h"
 #include "input.h"
 #include "syntax.h"
+#include "theme.h"
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -773,6 +774,88 @@ static int l_exec_async(lua_State *LS) {
     return 0;
 }
 
+/* ── Theme API ───────────────────────────────────────────────────────── */
+
+static int hl_name_to_index(const char *name) {
+    static const struct { const char *name; int idx; } map[] = {
+        {"normal",   HL_NORMAL},   {"comment",  HL_COMMENT},
+        {"keyword",  HL_KEYWORD},  {"type",     HL_TYPE},
+        {"string",   HL_STRING},   {"number",   HL_NUMBER},
+        {"escape",   HL_ESCAPE},   {"preproc",  HL_PREPROC},
+        {"bracket1", HL_BRACKET1}, {"bracket2", HL_BRACKET2},
+        {"bracket3", HL_BRACKET3}, {"bracket4", HL_BRACKET4},
+        {"search",   HL_SEARCH},   {"bracket_match", HL_BRACKET_MATCH},
+        {"visual",   HL_VISUAL},
+    };
+    for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++)
+        if (strcmp(map[i].name, name) == 0) return map[i].idx;
+    return -1;
+}
+
+static int l_add_theme(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Theme t = {0};
+
+    lua_getfield(L, 1, "name");
+    if (!lua_isstring(L, -1))
+        return luaL_error(L, "theme requires a 'name' field");
+    strncpy(t.name, lua_tostring(L, -1), sizeof(t.name) - 1);
+    lua_pop(L, 1);
+
+    /* Parse colors table. */
+    lua_getfield(L, 1, "colors");
+    if (lua_istable(L, -1)) {
+        lua_pushnil(L);
+        while (lua_next(L, -2)) {
+            if (lua_isstring(L, -2) && lua_isstring(L, -1)) {
+                int idx = hl_name_to_index(lua_tostring(L, -2));
+                if (idx >= 0 && idx < HL_TYPE_COUNT)
+                    t.hl_colors[idx] = strdup(lua_tostring(L, -1));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
+    /* Parse UI fields. */
+    lua_getfield(L, 1, "bg");
+    if (lua_isstring(L, -1)) t.bg = strdup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "fg");
+    if (lua_isstring(L, -1)) t.fg = strdup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "statusbar_active");
+    if (lua_isstring(L, -1)) t.statusbar_active = strdup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "statusbar_inactive");
+    if (lua_isstring(L, -1)) t.statusbar_inactive = strdup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "cursorline_bg");
+    if (lua_isstring(L, -1)) t.cursorline_bg = strdup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+
+    theme_register(&t);
+
+    /* Free the temporary strings (theme_register made copies). */
+    for (int i = 0; i < HL_TYPE_COUNT; i++) free(t.hl_colors[i]);
+    free(t.bg); free(t.fg);
+    free(t.statusbar_active); free(t.statusbar_inactive);
+    free(t.cursorline_bg);
+
+    return 0;
+}
+
+static int l_set_theme(lua_State *L) {
+    const char *name = luaL_checkstring(L, 1);
+    if (theme_set(name) != 0)
+        return luaL_error(L, "unknown theme: %s", name);
+    return 0;
+}
+
 static const luaL_Reg qe_lib[] = {
     {"set_option",   l_set_option},
     {"print",        l_print},
@@ -810,6 +893,9 @@ static const luaL_Reg qe_lib[] = {
     /* Tier 5: Shell execution */
     {"exec",           l_exec},
     {"exec_async",     l_exec_async},
+    /* Tier 6: Themes */
+    {"add_theme",      l_add_theme},
+    {"set_theme",      l_set_theme},
     {NULL,           NULL}
 };
 

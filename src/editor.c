@@ -7,6 +7,7 @@
 #include "term_emu.h"
 #include "lua_bridge.h"
 #include "recovery.h"
+#include "theme.h"
 #include "undofile.h"
 #include "utils.h"
 
@@ -127,6 +128,7 @@ void editor_init(void) {
     E.recovery_prompt_buf = -1;
     git_current_branch(E.git_branch, sizeof(E.git_branch));
 
+    theme_init();
     lang_register_defaults();
 }
 

@@ -19,6 +19,7 @@ add_executable(test_undo
     ${CMAKE_SOURCE_DIR}/src/syntax.c
     ${CMAKE_SOURCE_DIR}/src/terminal.c
     ${CMAKE_SOURCE_DIR}/src/utils.c
+    ${CMAKE_SOURCE_DIR}/src/theme.c
 )
 target_include_directories(test_undo PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_compile_definitions(test_undo PRIVATE QE_TEST)
@@ -82,6 +83,7 @@ add_executable(test_render
     ${CMAKE_SOURCE_DIR}/src/search.c
     ${CMAKE_SOURCE_DIR}/src/qf.c
     ${CMAKE_SOURCE_DIR}/src/term_emu.c
+    ${CMAKE_SOURCE_DIR}/src/theme.c
 )
 target_include_directories(test_render PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_compile_definitions(test_render PRIVATE QE_TEST)

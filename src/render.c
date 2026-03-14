@@ -7,6 +7,7 @@
 #include "search.h"
 #include "syntax.h"
 #include "term_emu.h"
+#include "theme.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -171,20 +172,7 @@ static const char *SPLASH[] = {
 };
 #define SPLASH_LINES ((int)(sizeof(SPLASH) / sizeof(SPLASH[0])))
 
-/* Map a HlType to its ANSI escape code, or NULL for HL_NORMAL. */
-static const char *hl_to_escape(unsigned char hl) {
-    switch ((HlType)hl) {
-        case HL_COMMENT: return "\x1b[2;36m";  /* dim cyan    */
-        case HL_KEYWORD: return "\x1b[1;33m";  /* bold yellow */
-        case HL_TYPE:    return "\x1b[36m";    /* cyan        */
-        case HL_STRING:  return "\x1b[32m";    /* green       */
-        case HL_NUMBER:  return "\x1b[35m";    /* magenta     */
-        case HL_SEARCH:        return SGR_REVERSE;  /* reverse      */
-        case HL_BRACKET_MATCH: return "\x1b[104;97m"; /* bright blue bg + white fg */
-        case HL_VISUAL:        return "\x1b[44m";     /* blue background           */
-        default:               return NULL;
-    }
-}
+/* Color mapping is now handled by the theme system (theme.h / theme.c). */
 
 /* For a given file row, compute the visual-selection column range [*c0, *c1).
    vis_anchor_row/col and cur_row/col are the selection bounds (from active pane).
@@ -292,10 +280,12 @@ static void render_row_content(AppendBuf *ab, const Row *row,
     if (cursor_col >= 0 && cursor_col < row->len)
         fhl[cursor_col] = row->hl ? row->hl[cursor_col] : HL_NORMAL;
 
-    /* Row background: diff tint or cursorline. */
+    /* Row background: diff tint, cursorline, or theme bg. */
     const char *bg_esc = diff_bg_escape(diff_bg);
     if (!bg_esc && cursorline)
-        bg_esc = "\x1b[48;5;236m";
+        bg_esc = theme_cursorline_bg();
+    if (!bg_esc)
+        bg_esc = theme_bg();
     int bg_esc_len = bg_esc ? (int)strlen(bg_esc) : 0;
 
     /* Render char by char, expanding tabs, clipped to the vcol viewport. */
@@ -324,7 +314,7 @@ static void render_row_content(AppendBuf *ab, const Row *row,
         if (cur != prev_hl) {
             ab_append(ab, SGR_RESET, 3);
             if (bg_esc) ab_append(ab, bg_esc, bg_esc_len);
-            const char *esc = hl_to_escape(cur);
+            const char *esc = theme_hl_escape(cur);
             if (esc) ab_append(ab, esc, (int)strlen(esc));
             prev_hl = cur;
             any_esc = 1;
@@ -512,9 +502,14 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
         int is_cursorline = 0;
         if (!row_bg && E.opts.cursorline && !no_gutter
             && filerow == pcy && filerow < buf->numrows) {
-            row_bg = "\x1b[48;5;236m";
+            row_bg = theme_cursorline_bg();
             is_cursorline = 1;
         }
+
+        /* Theme background: apply to every row so the entire editor area
+           is filled with the theme's background color. */
+        if (!row_bg && theme_bg())
+            row_bg = theme_bg();
 
         if (row_bg) ab_append(ab, row_bg, (int)strlen(row_bg));
 
@@ -819,7 +814,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
                 }
             }
         } else if (filerow >= buf->numrows) {
-            if (row_bg) ab_append(ab, SGR_RESET, 3);
+            /* Reset diff/cursorline bg, but keep theme bg for empty rows. */
+            if (row_bg && !theme_bg()) ab_append(ab, SGR_RESET, 3);
             ab_append(ab, "~", 1);
         } else {
             /* Gutter */
@@ -1017,7 +1013,8 @@ static void draw_pane_rows(AppendBuf *ab, const Pane *p,
 static void status_bar_simple(AppendBuf *ab, const Pane *p, int is_active,
                                const char *left, int llen,
                                const char *right, int rlen) {
-    ab_append(ab, is_active ? SGR_REVERSE : SGR_DIM_REV, is_active ? 4 : 6);
+    { const char *sb_esc = theme_statusbar_escape(is_active);
+    ab_append(ab, sb_esc, (int)strlen(sb_esc)); }
     char erase[16];
     int elen = snprintf(erase, sizeof(erase), "\x1b[%dX", p->width);
     ab_append(ab, erase, elen);
@@ -1167,7 +1164,8 @@ static void draw_pane_status(AppendBuf *ab, const Pane *p,
     }
 
     /* Active = full reverse video; inactive = dim reverse. */
-    ab_append(ab, is_active ? SGR_REVERSE : SGR_DIM_REV, is_active ? 4 : 6);
+    { const char *sb_esc = theme_statusbar_escape(is_active);
+    ab_append(ab, sb_esc, (int)strlen(sb_esc)); }
 
     /* Erase pane width with current attributes. */
     char erase[16];
@@ -1554,6 +1552,7 @@ void editor_refresh_screen(void) {
     ab_append(&ab, "\x1b[?2026h", 8); /* begin synchronized update */
     ab_append(&ab, "\x1b[?25l",   6); /* hide cursor */
     ab_append(&ab, SGR_RESET,     3); /* reset attributes before clear */
+    if (theme_bg()) ab_append(&ab, theme_bg(), (int)strlen(theme_bg()));
     ab_append(&ab, "\x1b[H",      3); /* cursor to home      */
     ab_append(&ab, "\x1b[J",      3); /* erase to end of screen (no scrollback push on macOS) */
 

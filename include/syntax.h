@@ -11,6 +11,12 @@ typedef enum {
     HL_TYPE,
     HL_STRING,
     HL_NUMBER,
+    HL_ESCAPE,         /* escape sequence inside string (\n, \t, \\, …)    */
+    HL_PREPROC,        /* preprocessor directive (#include, #define, …)     */
+    HL_BRACKET1,       /* rainbow bracket depth 1                          */
+    HL_BRACKET2,       /* rainbow bracket depth 2                          */
+    HL_BRACKET3,       /* rainbow bracket depth 3                          */
+    HL_BRACKET4,       /* rainbow bracket depth 4                          */
     HL_SEARCH,         /* render-only: search match overrides syntax        */
     HL_BRACKET_MATCH,  /* render-only: matching bracket pair                */
     HL_VISUAL,         /* render-only: visual selection                     */
