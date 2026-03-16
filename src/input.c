@@ -3741,14 +3741,15 @@ static void rev_handle_key(int c) {
 /* ── Command execution ───────────────────────────────────────────────── */
 
 static void editor_quit(void) {
-    /* Fire BufClose for each non-special buffer and remove recovery files
-       for clean (non-dirty) buffers.  Dirty buffers (force-quit via :q!)
-       intentionally keep their recovery files. */
+    /* Fire BufClose for each non-special buffer and remove recovery files.
+       Any path through editor_quit() is an intentional exit, so recovery
+       files are always cleaned up.  Crash recovery works because
+       editor_quit() never runs during a crash. */
     for (int i = 0; i < E.num_buftabs; i++) {
         if (buftab_is_special(&E.buftabs[i])) continue;
         Buffer *b = (i == E.cur_buftab) ? &E.buf : &E.buftabs[i].buf;
         lua_bridge_fire_event("BufClose", b->filename, NULL);
-        if (b->filename && !b->dirty)
+        if (b->filename)
             recovery_remove(b->filename);
     }
     write(STDOUT_FILENO, "\x1b[0 q", 5);  /* reset cursor shape */
