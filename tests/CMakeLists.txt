@@ -67,6 +67,15 @@ target_compile_definitions(test_recovery PRIVATE QE_TEST)
 target_link_libraries(test_recovery PRIVATE unity)
 add_test(NAME recovery COMMAND test_recovery)
 
+add_executable(test_theme
+    test_theme.c
+    ${CMAKE_SOURCE_DIR}/src/theme.c
+    ${CMAKE_SOURCE_DIR}/src/utils.c
+)
+target_include_directories(test_theme PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_theme PRIVATE unity)
+add_test(NAME theme COMMAND test_theme)
+
 add_executable(test_render
     test_render.c
     ${CMAKE_SOURCE_DIR}/src/render.c

@@ -120,3 +120,11 @@ const char *theme_bg(void) {
 const char *theme_fg(void) {
     return current_theme ? current_theme->fg : NULL;
 }
+
+void theme_reset(void) {
+    for (int i = 0; i < num_themes; i++)
+        theme_free_strings(&registry[i]);
+    num_themes    = 0;
+    current_theme = NULL;
+    memset(registry, 0, sizeof(registry));
+}

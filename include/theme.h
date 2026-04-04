@@ -23,5 +23,6 @@ const char  *theme_statusbar_escape(int is_active);
 const char  *theme_cursorline_bg(void);
 const char  *theme_bg(void);
 const char  *theme_fg(void);
+void         theme_reset(void);
 
 #endif
